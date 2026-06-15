@@ -10,12 +10,24 @@
 - [integrated_messages.py](file://src/integration/integrated_messages.py)
 - [integrated_ue.py](file://src/integration/integrated_ue.py)
 - [integrated_4g_ue.py](file://src/integration/integrated_4g_ue.py)
+- [integrated_4g_gnb.py](file://src/integration/integrated_4g_gnb.py)
+- [integrated_4g_messages.py](file://src/integration/integrated_4g_messages.py)
 - [eNAS.py](file://src/integration/eNAS.py)
 - [test_milenage.py](file://src/tests/test_milenage.py)
 - [test_imports.py](file://src/tests/test_imports.py)
 - [requirements.txt](file://requirements.txt)
 - [free5gc_subscription_template.json](file://config/free5gc_subscription_template.json)
+- [open5gs_subscription_template.json](file://config/open5gs_subscription_template.json)
 </cite>
+
+## Update Summary
+**Changes Made**
+- Added comprehensive 4G LTE integration with S1AP protocol support and EPS bearer establishment
+- Enhanced technical capabilities documentation to cover both 5G SA and 4G LTE registration procedures
+- Expanded NGAP and S1AP protocol implementation details with standardized message construction
+- Added 4G attach procedures, EPS bearer establishment, and S1AP message handling
+- Included detailed coverage of Milenage algorithm integration for 4G authentication
+- Enhanced cryptographic implementations using CryptoMobile for both 5G and 4G protocols
 
 ## Table of Contents
 1. [Introduction](#introduction)
@@ -29,14 +41,15 @@
 9. [Conclusion](#conclusion)
 
 ## Introduction
-This document describes CoreSimRunner’s technical capabilities with a focus on 5G end-to-end testing. It covers the 5G registration procedure (full Standalone SA workflow), PDU session establishment with DNN-based configuration and QoS flow setup, Milenage-based 5G authentication with configurable KI/OPC parameters, S-NSSAI slice support, NGAP protocol implementation with standardized message construction and handling, cryptographic implementations using CryptoMobile for 3GPP algorithms, and the integration architecture for SCTP-like transport, ASN.1 serialization/deserialization via pycrate, and state machine management. It also includes practical examples of registration flows, session establishment, authentication, and slice configuration.
+This document describes CoreSimRunner's technical capabilities with a focus on comprehensive 5G and 4G end-to-end testing. It covers the 5G registration procedure (full Standalone SA workflow), PDU session establishment with DNN-based configuration and QoS flow setup, Milenage-based 5G authentication with configurable KI/OPC parameters, S-NSSAI slice support, NGAP protocol implementation with standardized message construction and handling, cryptographic implementations using CryptoMobile for 3GPP algorithms, and the integration architecture for SCTP-like transport, ASN.1 serialization/deserialization via pycrate, and state machine management. Additionally, it documents the 4G LTE integration with S1AP protocol support, EPS bearer establishment, and comprehensive 4G attach procedures.
 
 ## Project Structure
-CoreSimRunner organizes functionality into modular components:
+CoreSimRunner organizes functionality into modular components with dual-mode support for 5G and 4G testing:
 - Entry point and orchestration: coresim_runner.py
 - Configuration management: config_loader.py
 - Core network subscription provisioning: core_network package (Free5GC/Open5GS)
 - Protocol integration and message handling: integration package (NGAP/NAS helpers, UE simulation)
+- 4G LTE integration: dedicated modules for S1AP protocol and EPS bearer management
 - Tests and validations: tests package
 
 ```mermaid
@@ -53,7 +66,8 @@ end
 subgraph "Protocol Integration"
 IM["integrated_messages.py"]
 IU["integrated_ue.py"]
-I4G["integrated_4g_ue.py"]
+I4GUE["integrated_4g_ue.py"]
+I4GGNB["integrated_4g_gnb.py"]
 ENAS["eNAS.py"]
 end
 CRS --> CFG
@@ -61,10 +75,11 @@ CRS --> CN
 CN --> F5GC
 CN --> O5GS
 CRS --> IU
-CRS --> I4G
+CRS --> I4GUE
+CRS --> I4GGNB
 IU --> IM
-I4G --> ENAS
-IU --> ENAS
+I4GUE --> ENAS
+I4GGNB --> ENAS
 ```
 
 **Diagram sources**
@@ -76,6 +91,7 @@ IU --> ENAS
 - [integrated_messages.py:1-559](file://src/integration/integrated_messages.py#L1-L559)
 - [integrated_ue.py:1-454](file://src/integration/integrated_ue.py#L1-L454)
 - [integrated_4g_ue.py:1-800](file://src/integration/integrated_4g_ue.py#L1-L800)
+- [integrated_4g_gnb.py:1-516](file://src/integration/integrated_4g_gnb.py#L1-L516)
 - [eNAS.py:1-753](file://src/integration/eNAS.py#L1-L753)
 
 **Section sources**
@@ -85,8 +101,10 @@ IU --> ENAS
 ## Core Components
 - Subscription provisioning for 5G core networks (Free5GC/Open5GS) via HTTP APIs with token-based authentication and JSON templates.
 - NGAP/NAS message builders and parsers for 5G registration and PDU session lifecycle.
-- 4G LTE NAS stack integration for EPS bearer establishment and PDN connectivity.
+- **Enhanced**: 4G LTE NAS stack integration for EPS bearer establishment and PDN connectivity with S1AP protocol support.
+- **Enhanced**: Comprehensive 4G attach procedures including authentication, security mode command, and bearer establishment.
 - Cryptographic primitives for 5G authentication (Milenage) and NAS integrity/encryption.
+- **Enhanced**: 4G cryptographic implementations using CryptoMobile for Milenage and 3GPP 33.401 key derivation.
 - Configuration loader supporting .env and JSON templates with placeholder substitution.
 
 **Section sources**
@@ -97,24 +115,31 @@ IU --> ENAS
 - [integrated_messages.py:265-284](file://src/integration/integrated_messages.py#L265-L284)
 - [integrated_messages.py:287-316](file://src/integration/integrated_messages.py#L287-L316)
 - [integrated_4g_ue.py:635-680](file://src/integration/integrated_4g_ue.py#L635-L680)
+- [integrated_4g_gnb.py:47-516](file://src/integration/integrated_4g_gnb.py#L47-L516)
+- [integrated_4g_messages.py:143-160](file://src/integration/integrated_4g_messages.py#L143-L160)
 - [config_loader.py:82-119](file://src/config_loader.py#L82-L119)
 
 ## Architecture Overview
-CoreSimRunner orchestrates multi-UE 5G registration and PDU session establishment. The flow:
+CoreSimRunner orchestrates multi-UE 5G registration and PDU session establishment, with comprehensive 4G LTE support. The flow includes:
 - Provision subscriptions to Free5GC/Open5GS using HTTP APIs.
 - Start UEs that send Initial UE Message to trigger registration.
 - Handle NGAP procedures: Authentication, Security Mode Command/Complete, Registration Accept/Complete, PDU Session Establishment.
+- **Enhanced**: 4G LTE flow with S1AP procedures: Attach Request, Authentication, Security Mode Command/Complete, EPS bearer establishment.
 - Construct NAS messages with proper headers, integrity, and optional encryption.
-- Parse NGAP PDUs and extract NAS payloads for processing.
+- Parse NGAP/S1AP PDUs and extract NAS payloads for processing.
 
 ```mermaid
 sequenceDiagram
 participant Runner as "coresim_runner.py"
 participant UE as "IntegratedUE"
+participant I4GUE as "Integrated4GUE"
 participant IM as "integrated_messages.py"
 participant CN as "CoreNetwork Impl"
 participant AMF as "AMF (simulated)"
 participant gNB as "gNB (simulated)"
+participant MME as "MME (simulated)"
+participant eNB as "eNodeB (simulated)"
+Note over Runner : 5G Registration Flow
 Runner->>CN : Provision/Delete Subscriptions
 Runner->>UE : Create UEs and start registration
 UE->>IM : Build Initial UE Message
@@ -133,7 +158,22 @@ UE->>gNB : Initial Context Setup Response + Registration Complete
 gNB->>AMF : Forward to AMF
 AMF->>UE : NGAP DL NAS Transport (PDU Session Est Accept)
 UE->>gNB : PDUSessionResourceSetupResponse
-gNB->>AMF : Forward to AMF
+Note over Runner : 4G LTE Flow
+Runner->>I4GUE : Create 4G UEs and start attach
+I4GUE->>eNB : Send Attach Request (S1AP)
+eNB->>MME : Forward to MME
+MME->>I4GUE : S1AP DownlinkNASTransport (Auth Request)
+I4GUE->>IM : Parse NAS, compute RES via Milenage
+I4GUE->>eNB : S1AP UplinkNASTransport (Auth Response)
+eNB->>MME : Forward to MME
+MME->>I4GUE : S1AP DownlinkNASTransport (Security Mode Command)
+I4GUE->>IM : Derive NAS keys, build Security Mode Complete
+I4GUE->>eNB : S1AP UplinkNASTransport (SMC)
+eNB->>MME : Forward to MME
+MME->>I4GUE : S1AP InitialContextSetupRequest (Attach Accept)
+I4GUE->>IM : Parse NAS, configure EPS bearer
+I4GUE->>eNB : S1AP InitialContextSetupResponse
+eNB->>MME : Forward to MME
 ```
 
 **Diagram sources**
@@ -144,6 +184,9 @@ gNB->>AMF : Forward to AMF
 - [integrated_messages.py:421-456](file://src/integration/integrated_messages.py#L421-L456)
 - [integrated_messages.py:458-472](file://src/integration/integrated_messages.py#L458-L472)
 - [integrated_messages.py:474-526](file://src/integration/integrated_messages.py#L474-L526)
+- [integrated_4g_ue.py:247-278](file://src/integration/integrated_4g_ue.py#L247-L278)
+- [integrated_4g_messages.py:318-375](file://src/integration/integrated_4g_messages.py#L318-L375)
+- [integrated_4g_gnb.py:310-433](file://src/integration/integrated_4g_gnb.py#L310-L433)
 
 ## Detailed Component Analysis
 
@@ -280,6 +323,7 @@ class ProcedureCode {
 +ID_INITIAL_CONTEXT_SETUP
 +ID_INITIAL_UE_MESSAGE
 +ID_NGSetup
++ID_PAGING
 +ID_PDU_SESSION_RESOURCE_SETUP
 +ID_UE_CONTEXT_RELEASE
 +ID_UE_CONTEXT_RELEASE_REQUEST
@@ -341,6 +385,7 @@ MessageType <.. IntegratedMessages
 - Milenage for 5G authentication (f2345/f1), RES*/KSEAF derivation via conv_501_A4/A2/A6.
 - NAS integrity/encryption using EEA/128 variants and EIA/128 variants (via pycrate_mobile).
 - Key derivation for NAS (K nas enc/int) from KASME and algorithm identifiers.
+- **Enhanced**: 4G cryptographic implementations using CryptoMobile for Milenage and 3GPP 33.401 key derivation.
 
 ```mermaid
 graph TB
@@ -360,15 +405,21 @@ NASKeys --> SEC["Security Protected NAS"]
 **Diagram sources**
 - [integrated_messages.py:125-150](file://src/integration/integrated_messages.py#L125-L150)
 - [integrated_messages.py:179-206](file://src/integration/integrated_messages.py#L179-L206)
+- [integrated_4g_messages.py:143-160](file://src/integration/integrated_4g_messages.py#L143-L160)
+- [integrated_4g_messages.py:265-279](file://src/integration/integrated_4g_messages.py#L265-L279)
 
 **Section sources**
 - [integrated_messages.py:125-150](file://src/integration/integrated_messages.py#L125-L150)
 - [integrated_messages.py:179-206](file://src/integration/integrated_messages.py#L179-L206)
+- [integrated_4g_messages.py:143-160](file://src/integration/integrated_4g_messages.py#L143-L160)
+- [integrated_4g_messages.py:265-279](file://src/integration/integrated_4g_messages.py#L265-L279)
 
 ### Protocol Integration Architecture
 - Transport: NGAP PDUs handled via pycrate ASN.1 descriptors; UE state machine tracks registration and session stages.
-- Serialization/Deserialization: pycrate_asn1dir for NGAP, pycrate_mobile for NAS structures.
+- **Enhanced**: 4G S1AP protocol support with dedicated eNodeB simulation and message handling.
+- Serialization/Deserialization: pycrate_asn1dir for NGAP/S1AP, pycrate_mobile for NAS structures.
 - State Machine: IntegratedUE maintains bit flags for Authentication, Security Mode, Registration Accept, and PDU Session Establishment.
+- **Enhanced**: Integrated4GUE maintains comprehensive 4G state tracking for attach procedures and EPS bearer management.
 
 ```mermaid
 stateDiagram-v2
@@ -381,22 +432,42 @@ RegComplete --> PDUSetup : "Send PDU Session Est Request"
 PDUSetup --> Active : "DL NAS PDU Session Accept"
 Active --> Released : "UE Context Release"
 Released --> [*]
+stateDiagram-v2
+[*] --> Idle
+Idle --> AttachReq : "S1AP Attach Request"
+AttachReq --> AuthReq : "S1AP DownlinkNASTransport (Auth Request)"
+AuthReq --> SMC : "S1AP UplinkNASTransport (Auth Response)"
+SMC --> AttachAccept : "S1AP DownlinkNASTransport (Security Mode Command)"
+AttachAccept --> EPSBearer : "S1AP InitialContextSetupRequest (Attach Accept)"
+EPSBearer --> Active : "S1AP InitialContextSetupResponse"
+Active --> Released : "S1AP UEContextRelease"
+Released --> [*]
 ```
 
 **Diagram sources**
 - [integrated_ue.py:124](file://src/integration/integrated_ue.py#L124)
 - [integrated_ue.py:189-306](file://src/integration/integrated_ue.py#L189-L306)
+- [integrated_4g_ue.py:124](file://src/integration/integrated_4g_ue.py#L124)
+- [integrated_4g_ue.py:247-278](file://src/integration/integrated_4g_ue.py#L247-L278)
 
 **Section sources**
 - [integrated_ue.py:124-166](file://src/integration/integrated_ue.py#L124-L166)
 - [integrated_ue.py:189-306](file://src/integration/integrated_ue.py#L189-L306)
+- [integrated_4g_ue.py:124-166](file://src/integration/integrated_4g_ue.py#L124-L166)
+- [integrated_4g_ue.py:247-278](file://src/integration/integrated_4g_ue.py#L247-L278)
 
-### 4G LTE Integration (Reference)
-- EMM/ESM pipeline with NAS encoding/decoding, Milenage computation, and bearer establishment.
-- Demonstrates equivalent cryptographic and state-machine patterns for 4G EPS bearers.
+### 4G LTE Integration (Enhanced)
+- **New**: Comprehensive 4G LTE NAS stack integration with EMM/ESM pipeline, Milenage computation, and EPS bearer establishment.
+- **New**: S1AP protocol support with dedicated eNodeB simulation and message handling.
+- **New**: 4G attach procedures including Attach Request, Authentication, Security Mode Command/Complete, and EPS bearer establishment.
+- **New**: EPS bearer management with E-RAB setup, TEID allocation, and bearer state tracking.
+- **New**: S1AP message construction and parsing for all 4G procedures including S1 Setup, Initial UE Message, and context setup.
 
 **Section sources**
 - [integrated_4g_ue.py:528-630](file://src/integration/integrated_4g_ue.py#L528-L630)
+- [integrated_4g_ue.py:247-278](file://src/integration/integrated_4g_ue.py#L247-L278)
+- [integrated_4g_gnb.py:47-516](file://src/integration/integrated_4g_gnb.py#L47-L516)
+- [integrated_4g_messages.py:143-160](file://src/integration/integrated_4g_messages.py#L143-L160)
 - [eNAS.py:13-105](file://src/integration/eNAS.py#L13-L105)
 
 ## Dependency Analysis
@@ -419,11 +490,13 @@ REQ --> TD["tqdm"]
 CRS --> CN["core_network/*"]
 CN --> RS
 CRS --> IU["integrated_ue.py"]
+CRS --> I4GUE["integrated_4g_ue.py"]
+CRS --> I4GGNB["integrated_4g_gnb.py"]
 IU --> IM["integrated_messages.py"]
+I4GUE --> ENAS["eNAS.py"]
+I4GGNB --> ENAS
 IM --> PC
 IM --> CM
-IU --> ENAS["eNAS.py"]
-ENAS --> CD
 ```
 
 **Diagram sources**
@@ -442,6 +515,7 @@ ENAS --> CD
 - NAS encryption/integrity overhead: Security-protected NAS adds CPU cost; selection of EEA/EIA algorithms impacts performance.
 - Multi-UE concurrency: UETestRunner manages concurrent UEs; ensure adequate system resources for high counts.
 - Logging verbosity: Lower log levels reduce I/O overhead during large-scale tests.
+- **Enhanced**: 4G S1AP message processing overhead: S1 Setup procedures and EPS bearer establishment add complexity to multi-UE testing scenarios.
 
 [No sources needed since this section provides general guidance]
 
@@ -450,6 +524,8 @@ ENAS --> CD
 - Authentication failures: Confirm KI/OPC parameters and OP-to-OPC derivation if applicable.
 - API errors (Free5GC/Open5GS): Check credentials, CSRF tokens, and endpoint reachability.
 - Milenage mismatches: Validate RAND/AUTN parsing and SQN calculation.
+- **Enhanced**: 4G S1AP communication issues: Verify MME connectivity, S1 Setup success, and proper S1AP message routing.
+- **Enhanced**: EPS bearer establishment failures: Check E-RAB setup responses, TEID allocation, and bearer state synchronization.
 
 **Section sources**
 - [test_imports.py:23-109](file://src/tests/test_imports.py#L23-L109)
@@ -458,4 +534,4 @@ ENAS --> CD
 - [open5gs_impl.py:34-89](file://src/core_network/open5gs_impl.py#L34-L89)
 
 ## Conclusion
-CoreSimRunner provides a comprehensive, modular framework for 5G end-to-end testing. It implements standardized NGAP/NAS procedures, robust cryptographic primitives, flexible configuration, and scalable multi-UE orchestration. The integration with Free5GC/Open5GS enables realistic subscription provisioning, while the internal UE simulator and message builders facilitate precise control over registration and session establishment flows, including S-NSSAI and DNN configurations.
+CoreSimRunner provides a comprehensive, modular framework for both 5G and 4G end-to-end testing. It implements standardized NGAP/NAS procedures for 5G and S1AP/NAS procedures for 4G, robust cryptographic primitives for both 5G and 4G authentication, flexible configuration, and scalable multi-UE orchestration. The integration with Free5GC/Open5GS enables realistic subscription provisioning, while the internal UE simulators and message builders facilitate precise control over registration and session establishment flows, including S-NSSAI and DNN configurations for 5G, and comprehensive 4G attach procedures with EPS bearer establishment and S1AP protocol support.

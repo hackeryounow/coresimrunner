@@ -2,460 +2,524 @@
 
 <cite>
 **Referenced Files in This Document**
-- [TROUBLESHOOTING.md](file://docs/TROUBLESHOOTING.md)
+- [README.md](file://README.md)
 - [diagnose_nas_mac.py](file://scripts/diagnose_nas_mac.py)
 - [test_imports.py](file://src/tests/test_imports.py)
 - [coresim_runner.py](file://src/coresim_runner.py)
 - [integrated_4g_messages.py](file://src/integration/integrated_4g_messages.py)
 - [integrated_gnb.py](file://src/integration/integrated_gnb.py)
 - [config_loader.py](file://src/config_loader.py)
-- [README.md](file://README.md)
 - [setup.sh](file://setup.sh)
 </cite>
 
+## Update Summary
+**Changes Made**
+- Updated troubleshooting section to reflect the comprehensive troubleshooting documentation now included in README.md
+- Enhanced diagnostic procedures with practical solutions and diagnostic commands
+- Added systematic approach to problem identification and resolution strategies
+- Improved coverage of common issues including import errors, connection problems, authentication failures, timeout errors, and duplicate subscription conflicts
+- Expanded diagnostic commands for testing imports, checking AMF connectivity, viewing core network logs, capturing NGAP traffic, and NAS MAC diagnosis
+- Added practical troubleshooting workflows, error message interpretation, and step-by-step resolution procedures
+
 ## Table of Contents
 1. [Introduction](#introduction)
-2. [Project Structure](#project-structure)
-3. [Core Components](#core-components)
-4. [Architecture Overview](#architecture-overview)
-5. [Detailed Component Analysis](#detailed-component-analysis)
-6. [Dependency Analysis](#dependency-analysis)
-7. [Performance Considerations](#performance-considerations)
-8. [Troubleshooting Guide](#troubleshooting-guide)
-9. [Conclusion](#conclusion)
-10. [Appendices](#appendices)
+2. [Systematic Troubleshooting Approach](#systematic-troubleshooting-approach)
+3. [Common Issues and Solutions](#common-issues-and-solutions)
+4. [Diagnostic Commands and Tools](#diagnostic-commands-and-tools)
+5. [NAS MAC Diagnosis Procedures](#nas-mac-diagnosis-procedures)
+6. [Log Analysis Techniques](#log-analysis-techniques)
+7. [Network Connectivity Verification](#network-connectivity-verification)
+8. [Practical Troubleshooting Workflows](#practical-troubleshooting-workflows)
+9. [Error Message Interpretation](#error-message-interpretation)
+10. [Debugging Steps for Different Failure Scenarios](#debugging-steps-for-different-failure-scenarios)
+11. [Performance Bottleneck Identification](#performance-bottleneck-identification)
+12. [Resource Constraint Troubleshooting](#resource-constraint-troubleshooting)
+13. [Escalation Procedures for Complex Issues](#escalation-procedures-for-complex-issues)
 
 ## Introduction
-This document provides a comprehensive troubleshooting and diagnostics guide for the CoreSimRunner project. It focuses on systematic problem identification, diagnosis procedures, and resolution strategies for common issues such as import errors, connection problems, authentication failures, timeout errors, and duplicate subscription conflicts. It also covers diagnostic commands for testing imports, checking AMF connectivity, viewing core network logs, capturing NGAP traffic, NAS MAC diagnosis, log analysis techniques, and network connectivity verification. Practical troubleshooting workflows, error message interpretation, and step-by-step resolution procedures are included, along with debugging steps for different failure scenarios, performance bottleneck identification, resource constraint troubleshooting, and escalation procedures.
+CoreSimRunner provides a comprehensive troubleshooting and diagnostics framework designed to systematically identify, diagnose, and resolve common issues in multi-UE 5G/4G core network testing environments. This guide focuses on practical problem identification, diagnosis procedures, and resolution strategies for import errors, connection problems, authentication failures, timeout errors, and duplicate subscription conflicts. It covers diagnostic commands for testing imports, checking AMF connectivity, viewing core network logs, capturing NGAP traffic, NAS MAC diagnosis, log analysis techniques, and network connectivity verification. The documentation includes practical troubleshooting workflows, error message interpretation, and step-by-step resolution procedures, along with debugging steps for different failure scenarios, performance bottleneck identification, resource constraint troubleshooting, and escalation procedures for complex issues.
 
-## Project Structure
-CoreSimRunner is organized around a modular architecture that separates core network abstraction from 5G protocol integration. Key areas relevant to troubleshooting include:
-- Diagnostics and tests: import verification, NAS MAC diagnostic tool
-- Core network orchestration: subscription provisioning and multi-UE testing
-- Protocol integration: NGAP/NAS message handling and 4G LTE integration
-- Configuration management: environment-driven configuration loading
+## Systematic Troubleshooting Approach
+The CoreSimRunner troubleshooting methodology follows a structured, step-by-step approach that ensures comprehensive problem identification and resolution:
 
-```mermaid
-graph TB
-subgraph "Diagnostics"
-T1["test_imports.py"]
-T2["diagnose_nas_mac.py"]
-end
-subgraph "Core Orchestration"
-C1["coresim_runner.py"]
-C2["config_loader.py"]
-end
-subgraph "Protocol Integration"
-P1["integrated_gnb.py"]
-P2["integrated_4g_messages.py"]
-end
-subgraph "Docs"
-D1["TROUBLESHOOTING.md"]
-D2["README.md"]
-end
-subgraph "Setup"
-S1["setup.sh"]
-end
-T1 --> C1
-T2 --> P2
-C1 --> P1
-C1 --> P2
-C2 --> C1
-D1 --> C1
-D2 --> C1
-S1 --> C1
-```
+### Phase 1: Initial Assessment
+- Verify system prerequisites and dependencies
+- Check environment configuration and network connectivity
+- Validate core network status and accessibility
 
-**Diagram sources**
-- [test_imports.py:1-115](file://src/tests/test_imports.py#L1-L115)
-- [diagnose_nas_mac.py:1-650](file://scripts/diagnose_nas_mac.py#L1-L650)
-- [coresim_runner.py:1-485](file://src/coresim_runner.py#L1-L485)
-- [integrated_gnb.py:1-416](file://src/integration/integrated_gnb.py#L1-L416)
-- [integrated_4g_messages.py:1-813](file://src/integration/integrated_4g_messages.py#L1-L813)
-- [config_loader.py:1-150](file://src/config_loader.py#L1-L150)
-- [TROUBLESHOOTING.md:1-449](file://docs/TROUBLESHOOTING.md#L1-L449)
-- [README.md:1-281](file://README.md#L1-L281)
-- [setup.sh:1-60](file://setup.sh#L1-L60)
+### Phase 2: Problem Classification
+- Categorize issues into import errors, connection problems, authentication failures, timeout errors, or duplicate subscription conflicts
+- Identify the specific component affected (imports, AMF connectivity, core network, NAS processing)
+
+### Phase 3: Diagnostic Execution
+- Run targeted diagnostic commands based on problem classification
+- Analyze logs and error messages for detailed insights
+- Compare expected vs. actual behavior
+
+### Phase 4: Resolution Implementation
+- Apply appropriate fixes based on diagnostic findings
+- Verify resolution through follow-up tests
+- Document lessons learned and preventive measures
+
+### Phase 5: Prevention and Optimization
+- Implement monitoring and alerting mechanisms
+- Optimize system configuration for reliability
+- Establish best practices for future deployments
+
+## Common Issues and Solutions
+
+### Import Errors
+**Symptoms**: ImportError exceptions indicating missing modules or failed imports
+**Root Causes**: Missing dependencies, incorrect Python path configuration, or workspace path issues
+**Solutions**:
+- Run `bash setup.sh` to install all required dependencies
+- Execute `python3 test_imports.py` to verify all imports succeed
+- Ensure workspace paths are correctly configured in Python path
+- Verify `pycrate` and `CryptoMobile` libraries are accessible
+
+### Connection Problems
+**Symptoms**: Connection refused errors, timeout during AMF connection, or SCTP association failures
+**Root Causes**: AMF service not running, firewall blocking ports, incorrect network configuration, or SCTP support issues
+**Solutions**:
+- Verify AMF container/service status and port accessibility
+- Check firewall rules and network connectivity between gNodeB and AMF
+- Ensure SCTP support is available and properly configured
+- Validate AMF address and port configuration in `.env` file
+
+### Authentication Failures
+**Symptoms**: Authentication rejected by core network, MAC verification failures, or subscriber validation errors
+**Root Causes**: Incorrect KI/OPC values, PLMN mismatch, expired AUTN values, or subscription data inconsistencies
+**Solutions**:
+- Verify subscription exists in core network database
+- Confirm KI and OPC values match subscription profile
+- Ensure PLMN configuration matches command parameters
+- Check AUTN freshness and sequence number synchronization
+- Review AMF authentication logs for detailed error messages
+
+### Timeout Errors
+**Symptoms**: Test execution exceeding configured timeout limits, registration failures, or session establishment timeouts
+**Root Causes**: Network congestion, insufficient system resources, high UE concurrency, or AMF performance issues
+**Solutions**:
+- Increase timeout values in test configuration
+- Reduce concurrent UE count for large-scale tests
+- Monitor AMF performance and resource utilization
+- Stagger UE initialization to avoid system overload
+- Optimize network parameters and buffer sizes
+
+### Duplicate Subscription Conflicts
+**Symptoms**: "Subscription already exists" errors or IMSI conflicts during provisioning
+**Root Causes**: Existing subscriber profiles, overlapping IMSI ranges, or configuration conflicts
+**Solutions**:
+- Delete existing subscriptions before provisioning new ones
+- Change starting IMSI index in `.env` configuration
+- Specify unique start-imsi parameter on command line
+- Clean up core network database of stale entries
+
+### Too Many Files Errors
+**Symptoms**: "Too many open files" or file descriptor limit exceeded errors
+**Root Causes**: Insufficient system file descriptor limits for high concurrency testing
+**Solutions**:
+- Increase file descriptor limits: `ulimit -n 65536`
+- Optimize file handle management in test execution
+- Reduce concurrent connections during peak loads
+- Implement proper resource cleanup and disposal
 
 **Section sources**
-- [README.md:236-253](file://README.md#L236-L253)
-- [TROUBLESHOOTING.md:1-449](file://docs/TROUBLESHOOTING.md#L1-L449)
+- [README.md:252-264](file://README.md#L252-L264)
 
-## Core Components
-- Import verification: Ensures all required dependencies are available and paths are configured.
-- NAS MAC diagnostic tool: Compares MAC computation between eNB reference implementation and CoreSimRunner integration code for LTE Security Mode Complete.
-- Core orchestration: Manages subscription provisioning and multi-UE testing, including argument parsing, configuration loading, and runtime orchestration.
-- Protocol integration: Implements NGAP/NAS message construction and handling for 5G and 4G LTE, including PLMN encoding and key derivation.
-- Configuration loader: Centralized configuration management from .env and JSON templates.
+## Diagnostic Commands and Tools
 
-Key responsibilities:
-- Import verification validates pycrate, CryptoMobile, loguru, and internal modules.
-- NAS MAC diagnostic compares PLMN encoding, KASME derivation, NAS keys, and MAC computation.
-- Core orchestration coordinates gNodeB connection, NGAP setup, and multi-UE registration.
-- Protocol integration constructs and parses NGAP/NAS messages and manages PLMN encoding and key derivation.
-- Configuration loader resolves environment variables and JSON templates for core network configuration.
+### Import Verification
+**Command**: `python3 test_imports.py`
+**Purpose**: Validates all required dependencies are available and paths are configured correctly
+**Expected Output**: All import tests should pass successfully
+**Troubleshooting**: If imports fail, run `bash setup.sh` and verify Python path configuration
+
+### AMF Connectivity Testing
+**Command**: `telnet 192.168.55.53 38412`
+**Purpose**: Tests SCTP port accessibility between test runner and AMF
+**Alternative**: `nc 192.168.55.53 38412`
+**Expected Result**: Successful connection indicates network connectivity is established
+
+### Core Network Log Monitoring
+**Free5GC**: `docker logs free5gc_amf -f`
+**Open5GS**: `journalctl -u open5gs-amfd -f`
+**Purpose**: Real-time monitoring of core network operations and error detection
+**Usage**: Tail logs during test execution to capture error messages and warnings
+
+### NGAP Traffic Capture
+**Command**: `sudo tcpdump -i any port 38412 -w ngap_capture.pcap`
+**Purpose**: Captures NGAP protocol traffic for detailed analysis
+**Analysis**: Use Wireshark or tshark to analyze captured packets and identify protocol-level issues
+
+### Subscription Data Verification
+**Command**: `curl` API endpoints or web UI/database queries
+**Purpose**: Verifies subscription data consistency and configuration accuracy
+**Scope**: Checks subscriber profiles, authentication parameters, and network slice configurations
+
+### Debug Logging Enablement
+**Command**: Add `--log-level DEBUG` to coresim_runner.py commands
+**Purpose**: Increases logging verbosity for detailed troubleshooting information
+**Usage**: Enable during problem reproduction to capture comprehensive diagnostic information
 
 **Section sources**
-- [test_imports.py:1-115](file://src/tests/test_imports.py#L1-L115)
+- [README.md:265-279](file://README.md#L265-L279)
+
+## NAS MAC Diagnosis Procedures
+
+### NAS MAC Diagnostic Tool Usage
+**Command**: `python3 scripts/diagnose_nas_mac.py --plmn 46099 --ki 1234...0000 --opc 71a1...131f --enc-alg 1 --int-alg 2`
+**Purpose**: Identifies root causes of NAS MAC verification failures by comparing eNB reference implementation and CoreSimRunner integration code
+
+### Diagnostic Process Flow
+1. **Input Parameter Validation**: Verify PLMN encoding, KI/OPC values, and algorithm selections
+2. **Milenage Computation**: Validate RES, CK, IK derivation using provided parameters
+3. **PLMN Encoding Comparison**: Compare eNB reference vs. CoreSimRunner PLMN encoding for KASME derivation
+4. **KASME Derivation Analysis**: Check KASME calculation consistency between implementations
+5. **NAS Key Derivation**: Validate NAS encryption and integrity key derivation
+6. **Security Mode Complete Construction**: Build and compare Security Mode Complete messages
+7. **MAC Computation Verification**: Compare MAC calculations between implementations
+
+### Key Diagnostic Areas
+- **PLMN Encoding**: Critical difference between eNB reference (correct 3GPP 24.301) and CoreSimRunner (incorrect S1AP format)
+- **Algorithm Selection**: Ensure correct EEA/EIA algorithm values and counter synchronization
+- **Key Derivation**: Validate KASME and NAS key derivation processes
+- **Message Construction**: Verify proper NAS message encoding and security header formatting
+
+**Section sources**
 - [diagnose_nas_mac.py:1-650](file://scripts/diagnose_nas_mac.py#L1-L650)
-- [coresim_runner.py:1-485](file://src/coresim_runner.py#L1-L485)
-- [integrated_4g_messages.py:118-141](file://src/integration/integrated_4g_messages.py#L118-L141)
-- [integrated_gnb.py:214-246](file://src/integration/integrated_gnb.py#L214-L246)
-- [config_loader.py:14-150](file://src/config_loader.py#L14-L150)
 
-## Architecture Overview
-The troubleshooting architecture centers on diagnostics and configuration-driven orchestration. The system uses:
-- Diagnostics scripts for import checks and NAS MAC comparisons
-- Core orchestration to manage AMF connectivity and multi-UE testing
-- Protocol integration modules for NGAP/NAS handling
-- Configuration loader to unify environment and JSON-based settings
+## Log Analysis Techniques
 
-```mermaid
-sequenceDiagram
-participant User as "User"
-participant Runner as "coresim_runner.py"
-participant Config as "config_loader.py"
-participant GNB as "integrated_gnb.py"
-participant Prot as "integrated_4g_messages.py"
-participant Diag as "diagnose_nas_mac.py"
-User->>Runner : "Run diagnostics/import checks"
-Runner->>Config : "Load .env and templates"
-Config-->>Runner : "Resolved configuration"
-Runner->>Prot : "Construct NGAP/NAS messages"
-Prot-->>Runner : "Encoded PDU"
-Runner->>GNB : "Connect to AMF and send NG Setup"
-GNB-->>Runner : "NG Setup Response"
-User->>Diag : "Run NAS MAC diagnostic"
-Diag-->>User : "Comparison results and fixes"
-```
+### Structured Log Filtering
+- Filter logs by severity level (ERROR, WARNING, INFO, DEBUG)
+- Filter by component (AMF, gNB, core network services)
+- Correlate timestamps across multiple components for timeline analysis
+- Search for specific error keywords and patterns
 
-**Diagram sources**
-- [coresim_runner.py:250-485](file://src/coresim_runner.py#L250-L485)
-- [config_loader.py:14-150](file://src/config_loader.py#L14-L150)
-- [integrated_gnb.py:214-246](file://src/integration/integrated_gnb.py#L214-L246)
-- [integrated_4g_messages.py:323-344](file://src/integration/integrated_4g_messages.py#L323-L344)
-- [diagnose_nas_mac.py:311-602](file://scripts/diagnose_nas_mac.py#L311-L602)
+### Error Pattern Recognition
+- Authentication failures: Look for "authentication rejected", "MAC verification failed", "invalid subscriber"
+- Connection issues: Identify "connection refused", "timeout", "port unavailable"
+- Protocol errors: Search for "ASN.1 decode failed", "message format error", "protocol violation"
+- Resource constraints: Monitor "too many open files", "memory exhausted", "connection pool full"
 
-## Detailed Component Analysis
+### Timeline Analysis
+- Correlate events across AMF, gNodeB, and UE components
+- Identify causality chains in multi-component failures
+- Track error propagation and recovery attempts
+- Analyze performance degradation patterns over time
 
-### Import Verification and Dependency Resolution
-Purpose:
-- Validate availability of pycrate, CryptoMobile, loguru, and internal modules.
-- Provide actionable feedback when dependencies are missing.
+### Log Rotation and Retention
+- Configure appropriate log rotation policies for long-running tests
+- Ensure critical error logs are preserved for post-mortem analysis
+- Balance log volume with storage capacity requirements
+- Implement log aggregation for distributed testing environments
 
-Key behaviors:
-- Adds workspace paths for pycrate and CryptoMobile.
-- Attempts imports for core modules and prints success/failure.
-- Suggests running setup.sh or manual installation.
+## Network Connectivity Verification
 
-Diagnostic commands:
-- python3 test_imports.py
-- python3 -c "import pycrate_asn1dir; import CryptoMobile; import loguru"
+### Basic Connectivity Tests
+- **Ping Test**: Verify basic IP connectivity between test runner and AMF
+- **Port Testing**: Use telnet or netcat to test SCTP port 38412 accessibility
+- **DNS Resolution**: Validate hostname-to-IP mapping for core network components
+- **Firewall Rules**: Check inbound/outbound rules for required ports and protocols
 
-Resolution strategies:
-- Run setup.sh to install dependencies and configure paths.
-- Manually export PYTHONPATH if using custom locations.
+### Protocol-Level Testing
+- **SCTP Association**: Verify SCTP connection establishment between gNodeB and AMF
+- **NGAP Message Exchange**: Test basic NGAP setup and teardown procedures
+- **NAS Message Flow**: Validate initial NAS message exchange during registration
+- **Session Establishment**: Test PDU session creation and tear-down procedures
+
+### Network Performance Metrics
+- **Latency Measurement**: Monitor round-trip times for critical network operations
+- **Throughput Testing**: Verify adequate bandwidth for concurrent UE testing
+- **Packet Loss Detection**: Identify network quality issues affecting test reliability
+- **Jitter Analysis**: Monitor timing variations that could affect NAS message synchronization
+
+### Troubleshooting Network Issues
+- **Path Tracing**: Use traceroute to identify network bottlenecks and routing issues
+- **Bandwidth Testing**: Verify network capacity meets test requirements
+- **Quality of Service**: Check network QoS settings affecting real-time traffic
+- **Security Policies**: Validate firewall and security policies allowing test traffic
+
+## Practical Troubleshooting Workflows
+
+### Workflow 1: Import Errors
+**Problem**: ImportError indicating missing modules
+**Step-by-Step Resolution**:
+1. Run `python3 test_imports.py` to identify failing imports
+2. Execute `bash setup.sh` to install missing dependencies
+3. Manually add workspace paths if needed using `export PYTHONPATH`
+4. Verify imports with `python3 test_imports.py` again
+5. Check Python version compatibility (3.8+ required)
 
 **Section sources**
 - [test_imports.py:1-115](file://src/tests/test_imports.py#L1-L115)
 - [setup.sh:11-27](file://setup.sh#L11-L27)
 
-### NAS MAC Diagnostic Tool
-Purpose:
-- Identify root causes of NAS MAC verification failures by comparing eNB reference implementation and CoreSimRunner integration code for LTE Security Mode Complete.
-
-Key behaviors:
-- Parses Security Mode Command to extract selected algorithms and optional fields.
-- Compares PLMN encoding used for KASME derivation between eNB and CoreSimRunner.
-- Derives KASME and NAS keys using standard 3GPP procedures.
-- Builds Security Mode Complete and computes MAC for both implementations.
-- Provides detailed comparison and suggests fixes.
-
-Diagnostic commands:
-- python3 scripts/diagnose_nas_mac.py --plmn 46099 --ki 1234...0000 --opc 71a1...131f --enc-alg 1 --int-alg 2
-
-Resolution strategies:
-- Fix PLMN encoding in KASME derivation to match eNB reference (correct 3GPP 24.301 encoding).
-- Ensure algorithm selection and counters align with captured SMC.
-- Validate AUTN and CK/IK values.
-
-```mermaid
-flowchart TD
-Start(["Start NAS MAC Diagnostic"]) --> Params["Parse inputs and SMC"]
-Params --> Milenage["Compute RES, CK, IK"]
-Milenage --> PLMN["Compare PLMN encodings"]
-PLMN --> KASME["Derive KASME for both implementations"]
-KASME --> Keys["Derive NAS keys (EEA/EIA)"]
-Keys --> SMComplete["Build Security Mode Complete"]
-SMComplete --> Encrypt["Encrypt NAS (EEA)"]
-Encrypt --> MAC["Compute MAC (EIA)"]
-MAC --> Compare["Compare outputs and suggest fixes"]
-Compare --> End(["End"])
-```
-
-**Diagram sources**
-- [diagnose_nas_mac.py:311-602](file://scripts/diagnose_nas_mac.py#L311-L602)
+### Workflow 2: Connection Refused to AMF
+**Problem**: Socket connection failure to AMF service
+**Step-by-Step Resolution**:
+1. Check AMF container/service status using `docker ps` or `systemctl status`
+2. Verify AMF is listening on port 38412 using `netstat -tulpn | grep 38412`
+3. Test port accessibility with `telnet 192.168.55.53 38412`
+4. Inspect firewall rules for port 38412 blocking
+5. Verify network connectivity between test runner and AMF
+6. Check AMF logs for startup errors or configuration issues
 
 **Section sources**
-- [diagnose_nas_mac.py:1-650](file://scripts/diagnose_nas_mac.py#L1-L650)
+- [README.md:259](file://README.md#L259)
 
-### Core Orchestration and Multi-UE Testing
-Purpose:
-- Manage subscription provisioning and multi-UE testing for 5G and 4G.
-- Provide argument parsing, configuration loading, and runtime orchestration.
-
-Key behaviors:
-- Supports modes: provision, ue-test, 4g-test.
-- Loads configuration from .env and JSON templates.
-- Establishes gNodeB connection to AMF and sends NG Setup Request.
-- Monitors registration progress and reports results.
-
-Diagnostic commands:
-- python3 coresim_runner.py --mode provision --count 1 --core-network free5gc
-- python3 coresim_runner.py --mode ue-test --count 1 --log-level DEBUG
-
-Resolution strategies:
-- Verify AMF address/port and network connectivity.
-- Check core network logs for detailed error messages.
-- Reduce concurrency or increase timeouts for large-scale tests.
-
-```mermaid
-sequenceDiagram
-participant User as "User"
-participant Runner as "coresim_runner.py"
-participant Config as "config_loader.py"
-participant GNB as "integrated_gnb.py"
-User->>Runner : "Select mode and parameters"
-Runner->>Config : "Load .env and templates"
-Config-->>Runner : "Resolved configuration"
-Runner->>GNB : "Initialize gNodeB and UEs"
-GNB->>GNB : "Connect to AMF and send NG Setup"
-GNB-->>Runner : "NG Setup Response"
-Runner-->>User : "Test results and metrics"
-```
-
-**Diagram sources**
-- [coresim_runner.py:250-485](file://src/coresim_runner.py#L250-L485)
-- [config_loader.py:121-150](file://src/config_loader.py#L121-L150)
-- [integrated_gnb.py:169-246](file://src/integration/integrated_gnb.py#L169-L246)
+### Workflow 3: NGAP Setup Failed
+**Problem**: AMF rejects NGAP setup requests
+**Step-by-Step Resolution**:
+1. Verify PLMN configuration matches between test runner and AMF
+2. Check AMF logs for specific setup failure reasons
+3. Validate gNodeB address is reachable from AMF network perspective
+4. Confirm core network IP addresses are correctly configured
+5. Review AMF configuration for supported PLMN and cell parameters
+6. Test basic connectivity using simple telnet or netcat commands
 
 **Section sources**
-- [coresim_runner.py:1-485](file://src/coresim_runner.py#L1-L485)
-- [integrated_gnb.py:1-416](file://src/integration/integrated_gnb.py#L1-L416)
+- [README.md:259](file://README.md#L259)
 
-### Protocol Integration: NGAP/NAS Handling
-Purpose:
-- Construct and parse NGAP/NAS messages for 5G and 4G LTE.
-- Implement PLMN encoding and key derivation according to 3GPP standards.
-
-Key behaviors:
-- NGAP message constructors for setup and transport procedures.
-- NAS message constructors for authentication, security mode, and session establishment.
-- PLMN encoding functions for S1AP and KASME contexts.
-- Key derivation functions for KASME and NAS keys.
-
-Diagnostic commands:
-- python3 coresim_runner.py --mode 4g-test --count 1 --log-level DEBUG
-
-Resolution strategies:
-- Validate PLMN encoding matches 3GPP 24.301 for KASME.
-- Ensure correct algorithm selection and counter values.
-- Verify DNN and slice configuration alignment.
+### Workflow 4: Authentication Failed
+**Problem**: Core network rejects authentication parameters
+**Step-by-Step Resolution**:
+1. Verify subscription exists in core network database
+2. Check KI and OPC values match subscription profile exactly
+3. Confirm PLMN configuration matches authentication command parameters
+4. Validate AUTN freshness and sequence number synchronization
+5. Review AMF authentication logs for detailed error messages
+6. Test with known-good credentials to isolate parameter issues
 
 **Section sources**
-- [integrated_4g_messages.py:118-141](file://src/integration/integrated_4g_messages.py#L118-L141)
-- [integrated_4g_messages.py:323-344](file://src/integration/integrated_4g_messages.py#L323-L344)
-- [integrated_4g_messages.py:465-481](file://src/integration/integrated_4g_messages.py#L465-L481)
+- [README.md:260](file://README.md#L260)
 
-### Configuration Management
-Purpose:
-- Centralized configuration management from .env and JSON templates.
-- Provide unified access to core network settings and parameters.
-
-Key behaviors:
-- Load .env file and resolve placeholders.
-- Load JSON templates and substitute placeholders with actual values.
-- Provide network-specific configuration for Free5GC/Open5GS.
-
-Diagnostic commands:
-- Check .env for required parameters (AMF_ADDRESS, GNB_ADDRESS, MCC/MNC, etc.).
-
-Resolution strategies:
-- Ensure all required environment variables are set.
-- Validate JSON template paths and contents.
+### Workflow 5: PDU Session Establishment Failed
+**Problem**: DNN configuration or UPF connectivity issues
+**Step-by-Step Resolution**:
+1. Verify DNN is configured in subscriber subscription profile
+2. Check UPF status and reachability from AMF perspective
+3. Validate slice configuration (SST/SD) matches test requirements
+4. Review SMF logs for UPF communication errors
+5. Test basic connectivity between AMF and UPF
+6. Verify network slice configuration in core network
 
 **Section sources**
-- [config_loader.py:14-150](file://src/config_loader.py#L14-L150)
-- [README.md:150-181](file://README.md#L150-L181)
+- [README.md:260](file://README.md#L260)
 
-## Dependency Analysis
-The troubleshooting system relies on several interdependent components:
-- Import verification depends on setup.sh and environment configuration.
-- NAS MAC diagnostic depends on CryptoMobile and eNB reference implementation.
-- Core orchestration depends on configuration loader and protocol integration modules.
-- Protocol integration depends on pycrate and CryptoMobile for ASN.1 and cryptographic operations.
-
-```mermaid
-graph TB
-Setup["setup.sh"] --> Imports["test_imports.py"]
-Imports --> Runner["coresim_runner.py"]
-Runner --> Config["config_loader.py"]
-Runner --> GNB["integrated_gnb.py"]
-Runner --> Prot["integrated_4g_messages.py"]
-Prot --> Diag["diagnose_nas_mac.py"]
-Diag --> Prot
-```
-
-**Diagram sources**
-- [setup.sh:1-60](file://setup.sh#L1-L60)
-- [test_imports.py:1-115](file://src/tests/test_imports.py#L1-L115)
-- [coresim_runner.py:1-485](file://src/coresim_runner.py#L1-L485)
-- [config_loader.py:1-150](file://src/config_loader.py#L1-L150)
-- [integrated_gnb.py:1-416](file://src/integration/integrated_gnb.py#L1-L416)
-- [integrated_4g_messages.py:1-813](file://src/integration/integrated_4g_messages.py#L1-L813)
-- [diagnose_nas_mac.py:1-650](file://scripts/diagnose_nas_mac.py#L1-L650)
+### Workflow 6: Timeout During Registration
+**Problem**: Exceeded configured timeout during UE registration
+**Step-by-Step Resolution**:
+1. Increase timeout values in test configuration or command line
+2. Reduce concurrent UE count for large-scale tests
+3. Monitor AMF performance and resource utilization during test
+4. Stagger UE initialization to avoid system overload
+5. Check network latency and optimize connection parameters
+6. Review AMF logs for performance bottlenecks
 
 **Section sources**
-- [README.md:236-253](file://README.md#L236-L253)
-- [TROUBLESHOOTING.md:1-449](file://docs/TROUBLESHOOTING.md#L1-L449)
+- [README.md:261](file://README.md#L261)
 
-## Performance Considerations
-- Logging overhead: Use WARNING or ERROR for large-scale tests to reduce logging noise.
-- Concurrency tuning: Adjust delays and thread pools to balance throughput and stability.
-- Resource limits: Increase file descriptor limits and system buffers for high concurrency.
-- Network tuning: Optimize SCTP buffer sizes and TCP parameters for high-throughput scenarios.
-
-[No sources needed since this section provides general guidance]
-
-## Troubleshooting Guide
-
-### Systematic Approach to Diagnosing Common Issues
-- Import errors: Run import verification script and ensure dependencies are installed and paths are configured.
-- Connection problems: Verify AMF status, port accessibility, firewall rules, and network connectivity.
-- Authentication failures: Confirm subscription existence, KI/OPC values, PLMN match, and AMF authentication logs.
-- Timeout errors: Increase timeouts, reduce concurrency, monitor AMF performance, and stagger UE initialization.
-- Duplicate subscription conflicts: Delete existing subscriptions or change starting IMSI index.
-
-### Diagnostic Commands and Tools
-- Test imports: python3 test_imports.py
-- Check AMF connectivity: telnet or nc to 192.168.55.53:38412
-- View core network logs: docker logs for Free5GC or journalctl for Open5GS
-- Capture NGAP traffic: sudo tcpdump -i any port 38412 -w ngap_capture.pcap
-- Verify subscription data: curl API endpoints or web UI/database queries
-- Enable debug logging: --log-level DEBUG in coresim_runner.py
-
-### NAS MAC Diagnosis Procedures
-- Run NAS MAC diagnostic tool with captured SMC and Security Mode Complete values.
-- Compare PLMN encodings used for KASME derivation.
-- Validate algorithm selection and counter values.
-- Rebuild and compare MAC outputs to identify mismatches.
-
-### Log Analysis Techniques
-- Filter logs by severity and component (AMF, gNB, core network).
-- Correlate timestamps across components to identify timing issues.
-- Search for error keywords (authentication, MAC verification, setup failures).
-- Use structured log formats and timestamps for precise analysis.
-
-### Network Connectivity Verification
-- Ping AMF address to verify reachability.
-- Telnet or netcat to test SCTP port 38412 accessibility.
-- Check firewall rules and routing tables.
-- Validate DNS resolution and hostname-to-IP mapping.
-
-### Practical Troubleshooting Workflows
-- Workflow 1: Import errors
-  - Run test_imports.py
-  - Execute setup.sh
-  - Manually add paths if needed
-  - Verify with test_imports.py
-
-- Workflow 2: Connection refused to AMF
-  - Check AMF container/service status
-  - Verify SCTP port accessibility
-  - Inspect firewall rules
-  - Test network connectivity
-
-- Workflow 3: NGAP setup failed
-  - Verify PLMN configuration matches
-  - Check AMF logs for setup errors
-  - Ensure gNB address is reachable from AMF
-
-- Workflow 4: Authentication failed
-  - Verify subscription exists in core network
-  - Check KI and OPC values match subscription
-  - Confirm PLMN matches command parameters
-  - Review AMF authentication logs
-
-- Workflow 5: PDU session establishment failed
-  - Verify DNN is configured in subscription
-  - Check UPF status and reachability
-  - Validate slice configuration (SST/SD)
-  - Review SMF logs for UPF errors
-
-- Workflow 6: Timeout during registration
-  - Increase timeout in test runner
-  - Reduce concurrency
-  - Monitor AMF performance
-  - Stagger UE initialization
-
-- Workflow 7: Duplicate IMSI error
-  - Delete existing subscriptions first
-  - Change starting IMSI index in .env
-  - Specify start-imsi on command line
-
-- Workflow 8: SCTP association failed
-  - Check SCTP support availability
-  - Install SCTP libraries if needed
-  - Verify AMF configuration supports SCTP
-
-### Error Message Interpretation
-- Import errors: ImportError indicating missing modules; resolve by running setup.sh or installing dependencies.
-- Connection refused: Socket connection failure to AMF; verify service status and port accessibility.
-- Authentication rejected: Core network rejects authentication parameters; confirm KI/OPC and PLMN.
-- PDU session establishment failed: DNN not configured or UPF unreachable; validate subscription and network paths.
-- Test timed out: Exceeded configured timeout; increase timeout or reduce concurrency.
-- Subscription already exists: Duplicate IMSI detected; delete existing subscriptions or change index.
-- SCTP association failed: SCTP support missing or AMF not configured; install SCTP libraries and verify configuration.
-
-### Debugging Steps for Different Failure Scenarios
-- Import errors: Run import verification, execute setup.sh, manually add paths, verify with import test.
-- Connection problems: Check AMF status, test port accessibility, inspect firewall rules, verify network connectivity.
-- Authentication failures: Verify subscription existence, check KI/OPC values, confirm PLMN match, review AMF logs.
-- Timeout errors: Increase timeout, reduce concurrency, monitor AMF performance, stagger UE initialization.
-- Duplicate subscription conflicts: Delete existing subscriptions, change starting IMSI index, specify start-imsi parameter.
-- SCTP association failures: Install SCTP support, verify AMF configuration, check SCTP availability.
-
-### Performance Bottleneck Identification
-- Monitor CPU and memory usage during tests.
-- Reduce logging verbosity for large-scale tests.
-- Tune system buffers and network parameters.
-- Adjust thread pools and concurrency limits.
-- Validate AMF capacity and resource allocation.
-
-### Resource Constraint Troubleshooting
-- Increase file descriptor limits: ulimit -n 65536
-- Tune system parameters: net.core.rmem_max, net.core.wmem_max, tcp_rmem/tcp_wmem
-- Optimize network buffers and TCP settings
-- Monitor and adjust thread pool sizes based on CPU cores
-
-### Escalation Procedures for Complex Issues
-- Collect comprehensive logs from all components (CoreSimRunner, AMF, gNB).
-- Capture NGAP and GTP-U traffic for deep analysis.
-- Compare with working configurations and examples.
-- Engage core network support channels with detailed logs and reproduction steps.
+### Workflow 7: Duplicate IMSI Error
+**Problem**: Duplicate IMSI detected during subscription provisioning
+**Step-by-Step Resolution**:
+1. Delete existing subscriptions using provision mode with `--delete` flag
+2. Change starting IMSI index in `.env` configuration file
+3. Specify unique start-imsi parameter on command line
+4. Verify IMSI uniqueness in core network database
+5. Test with reduced UE count to avoid conflicts
+6. Clean up any remaining stale subscription entries
 
 **Section sources**
-- [TROUBLESHOOTING.md:1-449](file://docs/TROUBLESHOOTING.md#L1-L449)
-- [README.md:200-235](file://README.md#L200-L235)
+- [README.md:262](file://README.md#L262)
 
-## Conclusion
-CoreSimRunner provides a robust framework for multi-UE testing with comprehensive diagnostics and troubleshooting capabilities. By following the systematic approach outlined in this document—starting with import verification, progressing through connectivity and authentication checks, leveraging NAS MAC diagnostics, and applying performance tuning—you can effectively identify and resolve common issues. The diagnostic commands, log analysis techniques, and escalation procedures ensure that complex problems can be systematically addressed with minimal downtime.
-
-## Appendices
-
-### Quick Diagnostic Script
-Run the following script to check your setup:
-- Save as diagnose.sh, make executable, and execute to verify Python version, required packages, network connectivity, SCTP port accessibility, and file descriptor limits.
+### Workflow 8: SCTP Association Failed
+**Problem**: SCTP support missing or AMF not configured for SCTP
+**Step-by-Step Resolution**:
+1. Check SCTP kernel module availability using `lsmod | grep sctp`
+2. Install SCTP libraries if needed using package manager
+3. Verify AMF configuration supports SCTP protocol
+4. Test SCTP connectivity using specialized tools
+5. Check firewall rules allow SCTP traffic
+6. Validate network infrastructure supports SCTP protocol
 
 **Section sources**
-- [TROUBLESHOOTING.md:415-449](file://docs/TROUBLESHOOTING.md#L415-L449)
+- [README.md:263](file://README.md#L263)
+
+## Error Message Interpretation
+
+### Import Error Messages
+**Common Patterns**: "ImportError: No module named ..." or "ModuleNotFoundError"
+**Interpretation**: Missing Python dependencies or incorrect import paths
+**Resolution**: Run setup script, verify Python path configuration, check virtual environment activation
+
+### Connection Error Messages
+**Common Patterns**: "Connection refused", "Connection timed out", "No route to host"
+**Interpretation**: Network connectivity or service availability issues
+**Resolution**: Check service status, verify port accessibility, inspect firewall configuration
+
+### Authentication Error Messages
+**Common Patterns**: "Authentication rejected", "Invalid subscriber", "MAC verification failed"
+**Interpretation**: Subscriber data mismatch or authentication parameter errors
+**Resolution**: Verify KI/OPC values, check PLMN configuration, validate AUTN freshness
+
+### PDU Session Error Messages
+**Common Patterns**: "DNN not configured", "UPF unreachable", "Slice configuration error"
+**Interpretation**: Network slice or DNN configuration issues
+**Resolution**: Verify subscription DNN settings, check UPF connectivity, validate slice parameters
+
+### Test Timeout Error Messages
+**Common Patterns**: "Test timed out", "Exceeded timeout", "Registration failed"
+**Interpretation**: Network performance or resource constraint issues
+**Resolution**: Increase timeout values, reduce concurrency, optimize system resources
+
+### Subscription Error Messages
+**Common Patterns**: "Subscription already exists", "IMSI conflict", "Duplicate entry"
+**Interpretation**: Existing subscriber profiles or configuration conflicts
+**Resolution**: Delete existing subscriptions, change IMSI ranges, clean database entries
+
+### SCTP Error Messages
+**Common Patterns**: "SCTP association failed", "Protocol not available", "No such device"
+**Interpretation**: SCTP support or configuration issues
+**Resolution**: Install SCTP libraries, verify AMF configuration, check system support
+
+## Debugging Steps for Different Failure Scenarios
+
+### Import Error Debugging
+1. **Run import verification**: Execute `python3 test_imports.py` to identify failing imports
+2. **Execute setup process**: Run `bash setup.sh` to install dependencies and configure paths
+3. **Manual path configuration**: Add workspace paths if automatic configuration fails
+4. **Verify import success**: Re-run import test to confirm resolution
+5. **Check Python compatibility**: Ensure Python 3.8+ is installed and active
+
+### Connection Problem Debugging
+1. **Service status verification**: Check AMF container/service status and health
+2. **Port accessibility testing**: Use telnet or netcat to test port 38412 connectivity
+3. **Firewall inspection**: Review firewall rules for port 38412 blocking
+4. **Network connectivity validation**: Verify reachability between components
+5. **AMF configuration review**: Check AMF logs for startup and configuration errors
+
+### Authentication Failure Debugging
+1. **Subscription verification**: Confirm subscriber exists in core network database
+2. **Parameter validation**: Check KI and OPC values match subscription exactly
+3. **PLMN consistency**: Ensure PLMN configuration matches authentication parameters
+4. **AUTN freshness check**: Validate AUTN sequence number and freshness
+5. **AMF log analysis**: Review detailed authentication error messages
+
+### Timeout Error Debugging
+1. **Timeout adjustment**: Increase timeout values in test configuration
+2. **Concurrency reduction**: Lower concurrent UE count for large-scale tests
+3. **Performance monitoring**: Monitor AMF resource utilization during execution
+4. **Initialization staggering**: Implement staggered UE initialization
+5. **Network optimization**: Check and optimize network parameters
+
+### Duplicate Subscription Debugging
+1. **Database cleanup**: Delete existing subscriptions using provision mode
+2. **IMSI range modification**: Change starting IMSI index in configuration
+3. **Parameter specification**: Use start-imsi command line parameter
+4. **Uniqueness verification**: Check IMSI uniqueness in core network
+5. **Conflict prevention**: Implement proper cleanup procedures
+
+### SCTP Association Debugging
+1. **Support verification**: Check SCTP kernel module availability
+2. **Library installation**: Install required SCTP libraries if missing
+3. **AMF configuration**: Verify AMF supports and is configured for SCTP
+4. **Connectivity testing**: Test SCTP connectivity between components
+5. **Infrastructure validation**: Ensure network infrastructure supports SCTP
+
+## Performance Bottleneck Identification
+
+### System Resource Monitoring
+- **CPU Utilization**: Monitor CPU usage during multi-UE testing to identify processing bottlenecks
+- **Memory Consumption**: Track memory usage patterns to detect leaks or excessive consumption
+- **Network Throughput**: Measure network bandwidth utilization during concurrent connections
+- **File Descriptor Limits**: Monitor file handle usage to prevent "too many open files" errors
+
+### Concurrency and Scalability Analysis
+- **Thread Pool Sizing**: Optimize thread pool configuration for balanced throughput and stability
+- **Connection Pool Management**: Implement efficient connection pooling for high concurrency
+- **Resource Allocation**: Balance CPU, memory, and network resources for optimal performance
+- **Load Distribution**: Distribute workload evenly across available system resources
+
+### Network Performance Optimization
+- **Buffer Sizing**: Adjust SCTP and TCP buffer sizes for high-throughput scenarios
+- **Connection Reuse**: Implement connection reuse strategies to reduce overhead
+- **Protocol Optimization**: Optimize protocol parameters for test scenarios
+- **Bandwidth Management**: Ensure adequate network bandwidth for concurrent testing
+
+### Logging and Monitoring Impact
+- **Logging Overhead**: Reduce logging verbosity for large-scale tests to minimize performance impact
+- **Log Aggregation**: Implement efficient log aggregation for distributed testing environments
+- **Performance Metrics**: Collect and analyze performance metrics during test execution
+- **Resource Profiling**: Profile application resource usage to identify optimization opportunities
+
+## Resource Constraint Troubleshooting
+
+### File Descriptor Management
+**Issue**: "Too many open files" or file descriptor limit exceeded errors
+**Solution**: 
+1. Increase system file descriptor limits: `ulimit -n 65536`
+2. Implement proper resource cleanup and disposal
+3. Optimize file handle management in test execution
+4. Monitor file descriptor usage during long-running tests
+
+### Memory Optimization
+**Issue**: Memory exhaustion during large-scale testing
+**Solution**:
+1. Implement memory-efficient data structures and algorithms
+2. Use streaming processing for large datasets
+3. Implement proper garbage collection and resource cleanup
+4. Monitor memory usage patterns and optimize allocation strategies
+
+### CPU Resource Management
+**Issue**: High CPU utilization causing test instability
+**Solution**:
+1. Optimize algorithm efficiency and reduce computational complexity
+2. Implement parallel processing with appropriate thread pool sizing
+3. Use asynchronous processing for I/O-bound operations
+4. Monitor CPU usage and identify hotspots for optimization
+
+### Network Resource Optimization
+**Issue**: Network bandwidth limitations affecting test performance
+**Solution**:
+1. Optimize network packet sizes and transmission rates
+2. Implement connection pooling and reuse strategies
+3. Use efficient serialization formats for data exchange
+4. Monitor network utilization and optimize transmission patterns
+
+## Escalation Procedures for Complex Issues
+
+### Comprehensive Issue Documentation
+1. **Problem Description**: Clear and concise problem statement with impact assessment
+2. **Reproduction Steps**: Detailed steps to reproduce the issue consistently
+3. **Environment Details**: Complete system configuration and dependency versions
+4. **Error Messages**: Complete error logs and stack traces
+5. **Test Configuration**: All relevant configuration parameters and test settings
+
+### Multi-Component Analysis
+1. **Component Isolation**: Identify which system components are affected
+2. **Dependency Mapping**: Document relationships between affected components
+3. **Impact Assessment**: Evaluate business impact and critical path dependencies
+4. **Workaround Documentation**: Document temporary solutions for continued operations
+
+### Evidence Collection and Analysis
+1. **Log Aggregation**: Collect logs from all affected components and systems
+2. **Traffic Capture**: Capture network traffic for protocol-level analysis
+3. **Performance Metrics**: Gather system performance and resource utilization data
+4. **Configuration Comparison**: Compare current configuration with known working setups
+
+### Expert Consultation and Support
+1. **Internal Review**: Conduct internal technical review with subject matter experts
+2. **External Support**: Engage vendor support channels when applicable
+3. **Community Engagement**: Seek assistance from relevant community forums and support groups
+4. **Documentation Enhancement**: Update troubleshooting guides and knowledge bases
+
+### Resolution Validation and Follow-up
+1. **Fix Verification**: Thoroughly test implemented solutions in controlled environment
+2. **Regression Testing**: Ensure fixes don't introduce new issues
+3. **Performance Validation**: Verify solution doesn't negatively impact system performance
+4. **Knowledge Transfer**: Document lessons learned and update operational procedures
+
+**Section sources**
+- [README.md:281-287](file://README.md#L281-L287)

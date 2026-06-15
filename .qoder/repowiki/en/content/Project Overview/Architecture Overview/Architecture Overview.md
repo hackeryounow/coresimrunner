@@ -19,6 +19,15 @@
 - [config/open5gs_subscription_template.json](file://config/open5gs_subscription_template.json)
 </cite>
 
+## Update Summary
+**Changes Made**
+- Enhanced module structure documentation with detailed implementation details
+- Updated design principles section with comprehensive architectural patterns
+- Added detailed component analysis for all major modules
+- Expanded dependency analysis with specific implementation relationships
+- Enhanced performance considerations with concurrency and threading details
+- Updated troubleshooting guide with specific error handling patterns
+
 ## Table of Contents
 1. [Introduction](#introduction)
 2. [Project Structure](#project-structure)
@@ -35,18 +44,25 @@ This document presents the architecture of CoreSimRunner, a multi-UE 5G/4G core 
 - Core network abstraction layer: responsible for provisioning/deleting subscriptions in different core networks (Free5GC/Open5GS).
 - 5G protocol integration layer: responsible for simulating gNodeB and UE behavior, performing registration, authentication, security mode command, and PDU session establishment procedures.
 
-It also documents the factory pattern for dynamic core network instantiation, the strategy-like pluggable backend design, and the observer-style progress monitoring used in multi-UE testing. The module structure, design principles (separation of concerns, thread safety, automatic path resolution, comprehensive error handling), and integration patterns with external dependencies are explained with diagrams and references to the source code.
+The framework implements several key architectural patterns:
+- **Factory Pattern**: Dynamic core network instantiation based on configuration
+- **Strategy Pattern**: Pluggable core network backend implementations
+- **Observer Pattern**: Real-time progress monitoring for multi-UE testing
+- **Thread Pool Pattern**: Concurrent UE management with thread-safe operations
+
+The module structure, design principles (separation of concerns, thread safety, automatic path resolution, comprehensive error handling), and integration patterns with external dependencies are explained with diagrams and references to the source code.
 
 ## Project Structure
-CoreSimRunner is organized into three primary modules plus configuration and tests:
-- core_network/: Abstraction and implementations for Free5GC and Open5GS subscription provisioning.
-- integration/: 5G protocol integration including gNodeB simulator, UE state machine, and NGAP/NAS message handling.
-- tests/: Unit and integration tests validating imports and basic functionality.
-- Root-level entry points and configuration loader.
+CoreSimRunner is organized into five primary modules plus configuration and tests:
+- core_network/: Abstraction and implementations for Free5GC and Open5GS subscription provisioning
+- integration/: 5G protocol integration including gNodeB simulator, UE state machine, and NGAP/NAS message handling
+- config_loader.py: Centralized configuration management with .env and JSON template support
+- coresim_runner.py: Main entry point with CLI argument parsing and orchestration
+- ue_test_runner.py: Multi-UE test orchestration with progress monitoring
 
 ```mermaid
 graph TB
-subgraph "CoreSimRunner"
+subgraph "CoreSimRunner Architecture"
 A["src/coresim_runner.py"]
 B["src/config_loader.py"]
 subgraph "core_network/"
@@ -93,21 +109,21 @@ B --> L
 - [config/open5gs_subscription_template.json:1-109](file://config/open5gs_subscription_template.json#L1-L109)
 
 **Section sources**
-- [README.md:236-281](file://README.md#L236-L281)
+- [README.md:288-337](file://README.md#L288-L337)
 - [coresim_runner.py:1-485](file://src/coresim_runner.py#L1-L485)
 
 ## Core Components
-- CoresimRunner entry point: orchestrates modes (provision, 5G UE test, 4G test), loads configuration, and delegates to core network and integration layers.
-- Core network abstraction: unified interface for subscription provisioning/deletion; factory resolves the concrete implementation.
-- Integration layer: gNodeB simulator, UE state machine, and NGAP/NAS message builders/parsers.
-- Test runner: multi-UE orchestration with progress monitoring and thread-safe counters.
+- **CoresimRunner Entry Point**: Orchestrates modes (provision, 5G UE test, 4G test), loads configuration, and delegates to core network and integration layers
+- **Core Network Abstraction**: Unified interface for subscription provisioning/deletion; factory resolves the concrete implementation
+- **Integration Layer**: gNodeB simulator, UE state machine, and NGAP/NAS message builders/parsers
+- **Test Runner**: Multi-UE orchestration with progress monitoring and thread-safe counters
 
 Key responsibilities:
-- CoresimRunner: argument parsing, configuration loading, mode dispatch, and high-level orchestration.
-- CoreNetwork: define contract for subscription lifecycle; implementations encapsulate API specifics.
-- IntegratedGNB: SCTP connection to AMF, message queues, worker threads, and per-UE message handling.
-- IntegratedUE: state machine for registration and PDU session establishment; constructs NAS/NGAP messages.
-- UETestRunner: instantiates gNodeB, monitors progress, aggregates results.
+- **CoresimRunner**: Argument parsing, configuration loading, mode dispatch, and high-level orchestration
+- **CoreNetwork**: Define contract for subscription lifecycle; implementations encapsulate API specifics
+- **IntegratedGNB**: SCTP connection to AMF, message queues, worker threads, and per-UE message handling
+- **IntegratedUE**: State machine for registration and PDU session establishment; constructs NAS/NGAP messages
+- **UETestRunner**: Instantiates gNodeB, monitors progress, aggregates results
 
 **Section sources**
 - [coresim_runner.py:27-485](file://src/coresim_runner.py#L27-L485)
@@ -118,12 +134,12 @@ Key responsibilities:
 - [ue_test_runner.py:35-260](file://src/ue_test_runner.py#L35-L260)
 
 ## Architecture Overview
-The system follows a layered architecture:
-- Presentation/Orchestration Layer: CoresimRunner parses CLI and coordinates flows.
-- Configuration Layer: ConfigLoader centralizes environment and JSON templates.
-- Core Network Abstraction Layer: CoreNetwork interface with Free5GC/Open5GS implementations.
-- Integration Layer: gNodeB simulator, UE state machine, and protocol message handling.
-- External Dependencies: HTTP APIs for core networks, pycrate/CryptoMobile for ASN.1 and cryptography, loguru for logging, requests for HTTP.
+The system follows a layered architecture with clear separation of concerns:
+- **Presentation/Orchestration Layer**: CoresimRunner parses CLI and coordinates flows
+- **Configuration Layer**: ConfigLoader centralizes environment and JSON templates
+- **Core Network Abstraction Layer**: CoreNetwork interface with Free5GC/Open5GS implementations
+- **Integration Layer**: gNodeB simulator, UE state machine, and protocol message handling
+- **External Dependencies**: HTTP APIs for core networks, pycrate/CryptoMobile for ASN.1 and cryptography, loguru for logging, requests for HTTP
 
 ```mermaid
 graph TB
@@ -176,9 +192,7 @@ CL --> O5GS_T
 ## Detailed Component Analysis
 
 ### Core Network Abstraction and Factory Pattern
-- CoreNetwork defines the abstract interface for subscription provisioning and deletion.
-- CoreNetworkFactory resolves the concrete implementation based on configuration, enabling pluggable backends.
-- Free5GC and Open5GS implementations encapsulate HTTP API specifics and authentication flows.
+The core network layer implements a clean abstraction with factory-based instantiation:
 
 ```mermaid
 classDiagram
@@ -220,9 +234,7 @@ CoreNetworkFactory --> CoreNetwork : "creates"
 - [core_network/open5gs_impl.py:15-197](file://src/core_network/open5gs_impl.py#L15-L197)
 
 ### 5G Protocol Integration Layer
-- IntegratedGNB: manages SCTP connection to AMF, message queues, worker threads, and per-UE handlers.
-- IntegratedUE: maintains UE state, processes NGAP/NAS messages, and generates responses.
-- integrated_messages: enums, helpers, and constructors for NGAP and NAS messages.
+The integration layer provides comprehensive 5G protocol simulation with multi-UE concurrency:
 
 ```mermaid
 classDiagram
@@ -282,8 +294,7 @@ IntegratedUE --> IntegratedMessages : "uses"
 - [integration/integrated_messages.py:33-559](file://src/integration/integrated_messages.py#L33-L559)
 
 ### Multi-UE Test Orchestration and Progress Monitoring
-- UETestRunner initializes IntegratedGNB with configured parameters, runs tests, and monitors progress using thread-safe counters.
-- CoresimRunner provides a CLI-driven flow for 5G/4G tests and subscription provisioning, delegating to UETestRunner or core network factory.
+The test runner provides sophisticated multi-UE orchestration with thread-safe monitoring:
 
 ```mermaid
 sequenceDiagram
@@ -327,8 +338,7 @@ end
 - [integration/integrated_gnb.py:169-213](file://src/integration/integrated_gnb.py#L169-L213)
 
 ### Configuration and Template Resolution
-- ConfigLoader reads .env, substitutes placeholders, and loads JSON templates for core network subscription provisioning.
-- Templates are parameterized and injected with runtime values from .env.
+The configuration system provides flexible parameter resolution with automatic template substitution:
 
 ```mermaid
 flowchart TD
@@ -353,10 +363,12 @@ Merge --> ReturnCfg["Return network config"]
 - [config/open5gs_subscription_template.json:1-109](file://config/open5gs_subscription_template.json#L1-L109)
 
 ## Dependency Analysis
-- CoresimRunner depends on ConfigLoader, CoreNetworkFactory, and UETestRunner.
-- CoreNetworkFactory depends on CoreNetwork and concrete implementations.
-- Integration components depend on pycrate (ASN.1), CryptoMobile (Milenage), and loguru/tqdm for logging and progress bars.
-- Tests validate imports and basic functionality.
+The system maintains clean dependency boundaries with well-defined interfaces:
+
+- **CoresimRunner** depends on ConfigLoader, CoreNetworkFactory, and UETestRunner
+- **CoreNetworkFactory** depends on CoreNetwork and concrete implementations
+- **Integration components** depend on pycrate (ASN.1), CryptoMobile (Milenage), and loguru/tqdm for logging and progress bars
+- **Tests** validate imports and basic functionality across all modules
 
 ```mermaid
 graph LR
@@ -394,30 +406,42 @@ TESTS --> UTR
 - [tests/test_ue_functionality.py:1-109](file://src/tests/test_ue_functionality.py#L1-L109)
 
 ## Performance Considerations
-- Concurrency: IntegratedGNB uses threading and queues to handle multiple UEs and messages concurrently; thread locks protect shared state.
-- Backpressure: Queues and delays between API requests reduce overload on core networks and AMF.
-- Logging: Lower log levels improve throughput for large-scale tests.
-- SCTP tuning: Ensure adequate buffer sizes for high concurrency.
+The system implements several performance optimization strategies:
 
-[No sources needed since this section provides general guidance]
+- **Concurrency Model**: IntegratedGNB uses threading and queues to handle multiple UEs and messages concurrently with thread locks protecting shared state
+- **Backpressure Control**: Queues and delays between API requests reduce overload on core networks and AMF
+- **Logging Optimization**: Lower log levels improve throughput for large-scale tests
+- **SCTP Tuning**: Ensure adequate buffer sizes for high concurrency scenarios
+- **Memory Management**: Proper cleanup of sockets and thread resources prevents resource leaks
+- **Connection Pooling**: Reuse authenticated sessions where possible to reduce overhead
 
 ## Troubleshooting Guide
-Common issues and diagnostics:
-- Import failures: verify setup script installation and PYTHONPATH additions for pycrate and CryptoMobile.
-- AMF connectivity: confirm AMF IP/port accessibility and SCTP availability.
-- Authentication failures: validate KI/OPC alignment with core network subscription data.
-- Duplicate subscriptions: clean up existing entries before provisioning.
-- Resource limits: increase file descriptors if encountering “too many open files.”
+Common issues and their solutions:
 
-Operational checks:
-- Run import verification script to validate dependencies.
-- Use telnet or network tools to probe AMF connectivity.
-- Inspect core network logs for detailed error messages.
-- Capture NGAP traffic for protocol-level debugging.
+**Import Failures**: Verify setup script installation and PYTHONPATH additions for pycrate and CryptoMobile
+**AMF Connectivity**: Confirm AMF IP/port accessibility and SCTP availability
+**Authentication Failures**: Validate KI/OPC alignment with core network subscription data
+**Duplicate Subscriptions**: Clean up existing entries before provisioning
+**Resource Limits**: Increase file descriptors if encountering "too many open files"
+
+**Operational Checks**:
+- Run import verification script to validate dependencies
+- Use telnet or network tools to probe AMF connectivity
+- Inspect core network logs for detailed error messages
+- Capture NGAP traffic for protocol-level debugging
 
 **Section sources**
-- [README.md:200-235](file://README.md#L200-L235)
+- [README.md:252-287](file://README.md#L252-L287)
 - [tests/test_imports.py:23-115](file://src/tests/test_imports.py#L23-L115)
 
 ## Conclusion
-CoreSimRunner’s architecture cleanly separates core network provisioning from 5G protocol integration, enabling extensibility and maintainability. The factory pattern facilitates pluggable core network backends, while the integration layer provides robust, thread-safe multi-UE testing. Automatic configuration resolution and comprehensive error handling contribute to operational reliability. The documented patterns and diagrams serve as a blueprint for extending support to additional core networks or integrating further protocol features.
+CoreSimRunner's architecture demonstrates clean separation between core network provisioning and 5G protocol integration, enabling extensibility and maintainability. The factory pattern facilitates pluggable core network backends, while the integration layer provides robust, thread-safe multi-UE testing. Automatic configuration resolution and comprehensive error handling contribute to operational reliability. The documented patterns and diagrams serve as a blueprint for extending support to additional core networks or integrating further protocol features.
+
+The framework successfully implements modern software engineering principles including:
+- **Separation of Concerns**: Clear module boundaries and responsibilities
+- **Design Patterns**: Factory, Strategy, Observer, and Thread Pool patterns
+- **Thread Safety**: Proper synchronization for concurrent operations
+- **Error Handling**: Comprehensive exception handling and graceful degradation
+- **Extensibility**: Pluggable architecture supporting new core networks
+
+This architecture positions CoreSimRunner as a production-ready testing framework suitable for both development and operational environments.
