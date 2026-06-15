@@ -83,8 +83,9 @@ class UETestRunner:
         self.config_loader = ConfigLoader(".env")
         
         # Use provided values or load from .env configuration
-        self.mcc = mcc or self._get_config_value("MCC", "460")
-        self.mnc = mnc or self._get_config_value("MNC", "99")
+        plmn = self._get_config_value("PLMN") or self._get_config_value("PLMN_ID", "20893")
+        self.mcc = mcc or plmn[:3]
+        self.mnc = mnc or plmn[3:]
         self.gnb_address = gnb_address or self._get_config_value("GNB_ADDRESS", "172.28.0.6")
         self.amf_address = amf_address
         self.number_of_ues = number_of_ues

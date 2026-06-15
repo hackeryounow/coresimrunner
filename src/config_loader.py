@@ -118,6 +118,45 @@ class ConfigLoader:
         pattern = r'\$\{([^}]+)\}'
         return re.sub(pattern, replace_match, content)
     
+    def get_plmn(self) -> str:
+        """Get PLMN ID, preferring explicit PLMN over legacy PLMN_ID.
+        
+        Returns:
+            str: PLMN ID (e.g., '20893')
+        """
+        return self.get("PLMN") or self.get("PLMN_ID", "20893")
+    
+    def get_mcc(self) -> str:
+        """Get MCC derived from PLMN (first 3 digits).
+        
+        Returns:
+            str: MCC (e.g., '208')
+        """
+        return self.get("MCC") or self.get_plmn()[:3]
+    
+    def get_mnc(self) -> str:
+        """Get MNC derived from PLMN (remaining digits after MCC).
+        
+        Returns:
+            str: MNC (e.g., '93')
+        """
+        return self.get("MNC") or self.get_plmn()[3:]
+    
+    def get_core_address(self) -> str:
+        """Get core network address, preferring CORE_ADDRESS over legacy names.
+        
+        Falls back: CORE_ADDRESS -> AMF_ADDRESS -> MME_ADDRESS -> CORE_NETWORK_IP
+        
+        Returns:
+            str: Core network IP address
+        """
+        return (
+            self.get("CORE_ADDRESS")
+            or self.get("AMF_ADDRESS")
+            or self.get("MME_ADDRESS")
+            or self.get("CORE_NETWORK_IP", "192.168.55.53")
+        )
+    
     def get_network_config(self, core_network: str) -> Dict[str, Any]:
         """Get network configuration for a specific core network.
         
@@ -129,9 +168,11 @@ class ConfigLoader:
         """
         # Unified base configuration
         base_config = {
-            "ip": self.get("CORE_NETWORK_IP"),
+            "ip": self.get_core_address(),
             "webui_port": self.get("WEBUI_PORT"),
-            "plmn_id": self.get("PLMN_ID", "20893"),
+            "plmn_id": self.get_plmn(),
+            "mcc": self.get_mcc(),
+            "mnc": self.get_mnc(),
             "username": self.get("USERNAME", "admin"),
             "password": self.get("PASSWORD", "1423"),
             "api_token": self.get("API_TOKEN", "admin"),

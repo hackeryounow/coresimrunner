@@ -67,13 +67,14 @@ def run_5g_test(args, config_loader):
         # Get configuration values from .env or use provided arguments
         network_config = config_loader.get_network_config(args.core_network)
         
-        mcc = args.mcc or config_loader.get("MCC") or network_config.get("plmn_id", "460")[:3]
-        mnc = args.mnc or config_loader.get("MNC") or network_config.get("plmn_id", "460")[3:]
+        plmn = args.plmn or config_loader.get_plmn()
+        mcc = plmn[:3]
+        mnc = plmn[3:]
         ki = args.ki or config_loader.get("PERMANENT_KEY", "12341234123412341234123412340000")
         opc = args.opc or config_loader.get("OPC_VALUE", "71a121bb69baf3c0cc53fb5038a0131f")
         start_imsi = args.start_imsi or f"{network_config.get('initial_imsi_index', 1):010d}"
         gnb_address = args.gnb_address or config_loader.get("GNB_ADDRESS", "192.168.55.9")
-        amf_address = args.amf_address or config_loader.get("AMF_ADDRESS", "192.168.55.53")
+        amf_address = args.core_address or config_loader.get_core_address()
         dnn = args.dnn or config_loader.get("DNN", "internet")
         tac = args.tac or config_loader.get("TAC", "000001")
         gnb_nr_cell_id = config_loader.get_int("GNB_NR_CELL_ID", 1)
@@ -102,7 +103,7 @@ def run_5g_test(args, config_loader):
         print(f"Number of UEs: {count}")
         print(f"gNodeB Address: {gnb_address}")
         print(f"AMF Address: {amf_address}")
-        print(f"PLMN: {mcc}{mnc}")
+        print(f"PLMN: {plmn}")
         print(f"Starting IMSI: {start_imsi}")
         print(f"DNN: {dnn}")
         print(f"TAC: {tac}")
@@ -126,16 +127,16 @@ def run_4g_test(args, config_loader):
         # Get configuration values from .env or use provided arguments
         network_config = config_loader.get_network_config(args.core_network)
         
-        mcc = args.mcc or config_loader.get("MCC") or network_config.get("plmn_id", "460")[:3]
-        mnc = args.mnc or config_loader.get("MNC") or network_config.get("plmn_id", "460")[3:]
+        plmn = args.plmn or config_loader.get_plmn()
+        mcc = plmn[:3]
+        mnc = plmn[3:]
         ki = args.ki or config_loader.get("PERMANENT_KEY", "12341234123412341234123412340000")
         opc = args.opc or config_loader.get("OPC_VALUE", "71a121bb69baf3c0cc53fb5038a0131f")
         start_imsi = args.start_imsi or f"{network_config.get('initial_imsi_index', 1):010d}"
-        plmn = args.plmn or f"{mcc}{mnc}"
         
         # Read 4G-specific parameters from .env (fallback to sensible defaults)
         enb_address = args.enb_address or config_loader.get("ENB_ADDRESS", "192.168.55.9")
-        mme_address = args.mme_address or config_loader.get("MME_ADDRESS") or config_loader.get("CORE_NETWORK_IP", "192.168.55.53")
+        mme_address = args.core_address or config_loader.get_core_address()
         mme_port = args.mme_port if args.mme_port is not None else config_loader.get_int("MME_PORT", 36412)
         enb_id = args.enb_id if args.enb_id is not None else config_loader.get_int("ENB_ID", 1)
         enb_cell_id = args.enb_cell_id if args.enb_cell_id is not None else config_loader.get_int("ENB_CELL_ID", 1000000)
@@ -257,14 +258,14 @@ Examples:
   # Run 5G test (all params from .env)
   %(prog)s --mode ue-test --core-network open5gs
   
-  # Run 5G test (override gnb/amf address via CLI)
-  %(prog)s --mode ue-test --count 10 --core-network free5gc --gnb-address 192.168.55.9 --amf-address 192.168.55.211
+  # Run 5G test (override gnb/core address via CLI)
+  %(prog)s --mode ue-test --count 10 --core-network free5gc --gnb-address 192.168.55.9 --core-address 192.168.55.211
   
   # Run 4G test (all params from .env)
   %(prog)s --mode 4g-test --core-network open5gs
   
   # Run 4G test (override address via CLI)
-  %(prog)s --mode 4g-test --count 10 --core-network open5gs --enb-address 192.168.55.9 --mme-address 192.168.55.53
+  %(prog)s --mode 4g-test --count 10 --core-network open5gs --enb-address 192.168.55.9 --core-address 192.168.55.53
         """
     )
     
@@ -304,8 +305,8 @@ Examples:
         default=None
     )
     parser.add_argument(
-        "--amf-address",
-        help="AMF IP address (default: from .env AMF_ADDRESS)",
+        "--core-address",
+        help="Core network IP address for AMF/MME/WebUI (default: from .env CORE_ADDRESS)",
         type=str,
         default=None
     )
@@ -320,12 +321,6 @@ Examples:
     parser.add_argument(
         "--enb-address",
         help="eNodeB IP address (default: from .env ENB_ADDRESS)",
-        type=str,
-        default=None
-    )
-    parser.add_argument(
-        "--mme-address",
-        help="MME IP address (default: from .env MME_ADDRESS or CORE_NETWORK_IP)",
         type=str,
         default=None
     )
@@ -367,24 +362,12 @@ Examples:
     )
     parser.add_argument(
         "--plmn",
-        help="PLMN ID for 4G (optional, derived from mcc/mnc if not provided)",
+        help="PLMN ID (MCC+MNC combined, e.g., 20893) (default: from .env PLMN)",
         type=str,
         default=None
     )
 
     # Common test arguments
-    parser.add_argument(
-        "--mcc",
-        help="Mobile Country Code (default: from .env or 460)",
-        type=str,
-        default=None
-    )
-    parser.add_argument(
-        "--mnc",
-        help="Mobile Network Code (default: from .env or 99)",
-        type=str,
-        default=None
-    )
     parser.add_argument(
         "--start-imsi",
         help="Starting IMSI suffix (10 digits, e.g., 0000000001)",
@@ -431,11 +414,11 @@ Examples:
                     
         elif args.mode == "ue-test":
             gnb_addr = args.gnb_address or config_loader.get("GNB_ADDRESS")
-            amf_addr = args.amf_address or config_loader.get("AMF_ADDRESS")
-            if not gnb_addr or not amf_addr:
-                print("Error: gNodeB and AMF addresses required for ue-test mode")
-                print("  Set via CLI: --gnb-address X.X.X.X --amf-address Y.Y.Y.Y")
-                print("  Or in .env:  GNB_ADDRESS=X.X.X.X  AMF_ADDRESS=Y.Y.Y.Y")
+            core_addr = args.core_address or config_loader.get_core_address()
+            if not gnb_addr or not core_addr:
+                print("Error: gNodeB and core network addresses required for ue-test mode")
+                print("  Set via CLI: --gnb-address X.X.X.X --core-address Y.Y.Y.Y")
+                print("  Or in .env:  GNB_ADDRESS=X.X.X.X  CORE_ADDRESS=Y.Y.Y.Y")
                 sys.exit(1)
             
             success = run_5g_test(args, config_loader)
