@@ -15,8 +15,12 @@ import struct
 import threading
 import time
 import queue
+import sctp
 from typing import List, Dict, Optional, Any
 from loguru import logger
+
+# S1AP requires SCTP PPID = 18 per 3GPP TS 36.412
+S1AP_PPID = 18
 
 # Add workspace libraries to Python path
 WORKSPACE_ROOT = '/root'
@@ -149,17 +153,8 @@ class Integrated4GGNB:
     def _setup_enb(self):
         """Create SCTP socket, connect to MME, perform S1 Setup."""
         try:
-            self.sctp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_SCTP)
+            self.sctp_socket = sctp.sctpsocket_tcp(socket.AF_INET)
             self.sctp_socket.bind((self.enb_ip, 0))
-
-            # Set SCTP default send params
-            try:
-                sctp_default_send_param = bytearray(self.sctp_socket.getsockopt(132, 10, 32))
-                sctp_default_send_param[11] = 18
-                self.sctp_socket.setsockopt(132, 10, sctp_default_send_param)
-            except Exception:
-                pass
-
             self.sctp_socket.connect((self.mme_ip, self.mme_port))
             logger.info(f"eNB connected to MME at {self.mme_ip}:{self.mme_port}")
 
@@ -196,7 +191,7 @@ class Integrated4GGNB:
 
             self.PDU.set_val(pdu_value)
             msg = self.PDU.to_aper()
-            self.sctp_socket.send(msg)
+            self.sctp_socket.sctp_send(msg, ppid=socket.htonl(S1AP_PPID))
             logger.info(f"S1 Setup Request sent from {self.enb_name}")
 
             # Receive S1 Setup Response
@@ -423,7 +418,7 @@ class Integrated4GGNB:
                 encoded = PDU.to_aper()
                 logger.debug(f"Sender: sending PDU procedure={message[1].get('value', ('?',))[0]}, {len(encoded)} bytes")
                 with self.socket_lock:
-                    self.sctp_socket.send(encoded)
+                    self.sctp_socket.sctp_send(encoded, ppid=socket.htonl(S1AP_PPID))
             except queue.Empty:
                 continue
             except Exception as e:

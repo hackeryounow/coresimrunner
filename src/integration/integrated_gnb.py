@@ -27,9 +27,13 @@ import queue
 import threading
 import socket
 import struct
+import sctp
 from typing import List, Dict, Optional
 from tqdm import tqdm
 from loguru import logger
+
+# NGAP requires SCTP PPID = 60 per 3GPP TS 38.412
+NGAP_PPID = 60
 
 # Import required modules from 5gregpdu structure
 try:
@@ -39,7 +43,7 @@ except ImportError as e:
     print("Please run: bash setup.sh")
     sys.exit(1)
 
-from integrated_messages import NGAPSetupReqeust, RAN_UE_NGAP_LEN_LABLES
+from integrated_messages import NGAPSetupReqeust
 from integrated_messages import ProcedureCode
 from integrated_ue import IntegratedUE
 
@@ -74,7 +78,8 @@ class IntegratedGNB:
                  ABBA: bytes = b"\x00\x00",
                  ciphAlgo: int = 0,
                  ntegAlgo: int = 2,
-                 logging_level: str = 'INFO'):
+                 logging_level: str = 'INFO',
+                 enable_ims: bool = False):
         """
         Initialize the integrated gNB simulator.
         
@@ -127,6 +132,7 @@ class IntegratedGNB:
         self.ciphAlgo = ciphAlgo
         self.ntegAlgo = ntegAlgo
         self.logging_level = logging_level
+        self.enable_ims = enable_ims
         
         # Internal state
         self.gnb_amf = None
@@ -196,7 +202,8 @@ class IntegratedGNB:
                 ABBA=self.ABBA,
                 ciphAlgo=self.ciphAlgo,
                 ntegAlgo=self.ntegAlgo,
-                logging_level=self.logging_level
+                logging_level=self.logging_level,
+                enable_ims=self.enable_ims
             )
             self.ran_ue_ngap_idx += 1
             with self.ue_lock:
@@ -214,7 +221,7 @@ class IntegratedGNB:
     def _setup_gnb(self):
         """Setup gNB connection to AMF."""
         try:
-            self.sctp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_SCTP)
+            self.sctp_socket = sctp.sctpsocket_tcp(socket.AF_INET)
             self.sctp_socket.bind((self.gnb_address, 0))
             self.sctp_socket.connect((self.amf_address, self.amf_port))
             
@@ -228,7 +235,7 @@ class IntegratedGNB:
                 sst=self.slices["SST"], 
                 sd=self.slices.get("SD", None)
             ))
-            self.sctp_socket.send(self.PDU.to_aper())
+            self.sctp_socket.sctp_send(self.PDU.to_aper(), ppid=socket.htonl(60))
             
             # Receive NG Setup Response
             data = self.sctp_socket.recv(4096)
@@ -262,7 +269,7 @@ class IntegratedGNB:
         """Send NGAP message to AMF."""
         try:
             self.PDU.set_val(message)
-            self.sctp_socket.send(self.PDU.to_aper())
+            self.sctp_socket.sctp_send(self.PDU.to_aper(), ppid=socket.htonl(60))
         except Exception as e:
             logger.error(f"Failed to send message: {e}")
 
@@ -283,16 +290,34 @@ class IntegratedGNB:
                 data = self.sctp_socket.recv(4096)
                 if not data:
                     break
-                    
-                data_hex = data.hex()
-                ran_ue_ngap_id = self._extract_ran_ue_ngap_id(data_hex)
+                
+                # Properly decode NGAP PDU to extract RAN UE NGAP ID
+                PDU = NGAP_PDU_Descriptions.NGAP_PDU
+                PDU.from_aper(data)
+                type_t, pdu_dict = PDU()
+                
+                procedure_code = pdu_dict['procedureCode']
+                
+                # Skip error indications and paging
+                try:
+                    proc = ProcedureCode(procedure_code)
+                    if proc in (ProcedureCode.ID_ERROR_INDICATION, ProcedureCode.ID_PAGING):
+                        continue
+                except ValueError:
+                    pass
+                
+                protocol_ies = pdu_dict['value'][1]['protocolIEs']
+                ran_ue_ngap_id = self._extract_ran_ue_ngap_id_from_ies(protocol_ies)
                 if ran_ue_ngap_id is None:
                     continue
-                    
+                
+                # Convert to 0-based UE index
+                idx = ran_ue_ngap_id - 1
+                
                 # Handle message in separate thread
                 handler_thread = threading.Thread(
                     target=self._ngap_message_handler, 
-                    args=(data, ran_ue_ngap_id - 1)
+                    args=(data, idx)
                 )
                 handler_thread.daemon = True
                 handler_thread.start()
@@ -334,37 +359,26 @@ class IntegratedGNB:
         except Exception as e:
             logger.error(f"Error handling message for UE {idx}: {e}")
 
-    def _extract_ran_ue_ngap_id(self, data_hex):
-        """Extract RAN UE NGAP ID from message hex."""
+    def _extract_ran_ue_ngap_id_from_ies(self, protocol_ies):
+        """Extract RAN UE NGAP ID from decoded NGAP protocol IEs.
+        
+        Handles both direct RAN-UE-NGAP-ID (id=85) and nested
+        UE-NGAP-IDs (id=114) used in UEContextReleaseCommand.
+        """
         try:
-            procedurecode = ProcedureCode(int(data_hex[2:4], 16))
-            if procedurecode == ProcedureCode.ID_ERROR_INDICATION:
-                return None
-            elif procedurecode == ProcedureCode.ID_INITIAL_CONTEXT_SETUP:
-                extra_length = (int(data_hex[22:24], 16) - 2) * 2
-                length = int(data_hex[34 + extra_length:36 + extra_length], 16)
-                return int(data_hex[38 + extra_length:38 + extra_length + (length - 1) * 2], 16)
-            elif procedurecode == ProcedureCode.ID_PDU_SESSION_RESOURCE_SETUP:
-                start_ind = data_hex.find("005500") + 6
-                if start_ind < 6:
-                    return None
-                length = int(data_hex[start_ind:start_ind + 2], 16)
-                return int(data_hex[start_ind + 4:start_ind + 4 + (length - 1) * 2], 16)
-            elif procedurecode == ProcedureCode.ID_UE_CONTEXT_RELEASE:
-                start_ind = 20
-                amf_ran_len = int(data_hex[start_ind:start_ind + 2], 16)
-                start_ind += 2
-                amf_id_len = int(data_hex[start_ind:start_ind + 2], 16)
-                start_ind += 2 + (amf_id_len - 1) * 2 if amf_id_len != 6 else 8 + 2
-                ran_id_len = RAN_UE_NGAP_LEN_LABLES.get(data_hex[start_ind:start_ind + 2], 1)
-                return int(data_hex[start_ind + 2:start_ind + 2 + ran_id_len*2], 16)
-            elif procedurecode == ProcedureCode.ID_PAGING:
-                return None
-            else:
-                extra_length = (int(data_hex[20:22], 16) - 2) * 2
-                length = int(data_hex[32 + extra_length:34 + extra_length], 16)
-                return int(data_hex[36 + extra_length:36 + extra_length + (length - 1) * 2], 16)
-        except Exception as e:
+            for ie in protocol_ies:
+                # Direct RAN-UE-NGAP-ID
+                if ie['id'] == 85:
+                    return ie['value'][1]
+                # UE-NGAP-IDs (contains AMF-UE-NGAP-ID and RAN-UE-NGAP-ID pair)
+                if ie['id'] == 114:
+                    ue_ngap_ids = ie['value']
+                    if isinstance(ue_ngap_ids, tuple) and len(ue_ngap_ids) == 2:
+                        if ue_ngap_ids[0] == 'uE-NGAP-ID-pair':
+                            return ue_ngap_ids[1].get('rAN-UE-NGAP-ID')
+            logger.warning(f"RAN-UE-NGAP-ID not found (IE IDs: {[ie['id'] for ie in protocol_ies]})")
+            return None
+        except (KeyError, IndexError, TypeError) as e:
             logger.warning(f"Failed to extract RAN UE NGAP ID: {e}")
             return None
 

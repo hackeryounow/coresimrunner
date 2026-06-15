@@ -34,34 +34,26 @@ def provision_subscriptions(count: int, core_network_type: str, delete: bool = F
         delete: If True, delete subscriptions instead of provisioning
     """
     try:
-        # Load configuration
         config_loader = ConfigLoader()
-        
-        # Create core network instance
         core_network = create_core_network(core_network_type, config_loader)
         if core_network is None:
-            print(f"Error: Unsupported core network type '{core_network_type}'")
+            logger.error(f"Unsupported core network type '{core_network_type}'")
             return False
         
+        action = "Delete" if delete else "Provision"
+        logger.info(f"{action}ing {count} subscriptions on {core_network_type}...")
+        
         if delete:
-            print(f"Deleting {count} subscriptions from {core_network_type} core network...")
             success = core_network.delete_subscriptions(count)
         else:
-            print(f"Provisioning {count} subscriptions to {core_network_type} core network...")
             success = core_network.provision_subscriptions(count)
         
         if success:
-            if delete:
-                print(f"✓ Successfully deleted {count} subscriptions from {core_network_type}")
-            else:
-                print(f"✓ Successfully provisioned {count} subscriptions to {core_network_type}")
-            return True
-        else:
-            print(f"✗ Failed to {'delete' if delete else 'provision'} subscriptions")
-            return False
+            logger.info(f"{action}ed {count}/{count} subscriptions successfully")
+        return success
             
     except Exception as e:
-        print(f"Error during subscription {'deletion' if delete else 'provisioning'}: {e}")
+        logger.error(f"Error during subscription {'deletion' if delete else 'provisioning'}: {e}")
         import traceback
         traceback.print_exc()
         return False

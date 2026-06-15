@@ -7,8 +7,11 @@ using configuration from .env and JSON files.
 
 import json
 import time
-from typing import Dict, Any
+from typing import Dict, Any, Tuple
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
+from tqdm import tqdm
+from loguru import logger
 from core_network.core_network import CoreNetwork
 
 
@@ -41,7 +44,6 @@ class Open5GS(CoreNetwork):
         
         try:
             # Get CSRF token
-            print("Getting CSRF token...")
             csrf_response = session.get(self.csrf_url, timeout=30)
             
             csrf_data = csrf_response.json()
@@ -63,7 +65,7 @@ class Open5GS(CoreNetwork):
             )
             
             if login_response.status_code != 200:
-                print(f"✗ Failed to authenticate with Open5GS: HTTP {login_response.status_code}")
+                logger.error(f"Failed to authenticate with Open5GS: HTTP {login_response.status_code}")
                 return None
             
             # Get session information
@@ -79,118 +81,78 @@ class Open5GS(CoreNetwork):
                 "Authorization": f"Bearer {auth_token}"
             })
             
+            logger.info("Successfully authenticated with Open5GS")
             return session
             
         except requests.exceptions.RequestException as e:
-            print(f"✗ Authentication error: {e}")
+            logger.error(f"Authentication error: {e}")
             return None
         except KeyError as e:
-            print(f"✗ Missing expected data in Open5GS response: {e}")
+            logger.error(f"Missing expected data in Open5GS response: {e}")
             return None
     
+    def _provision_one(self, session: requests.Session, imsi_index: int) -> Tuple[int, bool]:
+        """Provision a single subscription (thread-safe via session). Returns (index, success)."""
+        imsi = f"{self.plmn_id}{imsi_index:010d}"
+        subscription_data = self.subscription_template.copy()
+        subscription_data["imsi"] = imsi
+        try:
+            resp = session.post(self.subscriber_url, data=json.dumps(subscription_data), timeout=30)
+            if resp.status_code == 201:
+                return imsi_index, True
+        except Exception:
+            pass
+        return imsi_index, False
+
+    def _delete_one(self, session: requests.Session, imsi_index: int) -> Tuple[int, bool]:
+        """Delete a single subscription (thread-safe via session). Returns (index, success)."""
+        imsi = f"{self.plmn_id}{imsi_index:010d}"
+        delete_url = f"{self.subscriber_url}/{imsi}"
+        try:
+            resp = session.delete(delete_url, timeout=30)
+            if resp.status_code in (200, 204):
+                return imsi_index, True
+        except Exception:
+            pass
+        return imsi_index, False
+
     def provision_subscriptions(self, count: int) -> bool:
-        """Provision subscriptions to Open5GS.
-        
-        Args:
-            count (int): Number of subscriptions to provision
-            
-        Returns:
-            bool: True if successful, False otherwise
-        """
-        # Authenticate
+        """Provision subscriptions to Open5GS using concurrent threads."""
         session = self._authenticate()
         if not session:
             return False
-        
-        # Always start from INITIAL_IMSI_INDEX
         start_index = self._get_initial_imsi_index()
-        success_count = 0
-        
-        try:
-            # Provision subscriptions
-            for i in range(count):
-                imsi_index = start_index + i
-                imsi = f"{self.plmn_id}{imsi_index:010d}"
-                
-                # Create subscription data from template
-                subscription_data = self.subscription_template.copy()
-                subscription_data["imsi"] = imsi
-                
-                print(f"Provisioning subscription {imsi} to Open5GS...")
-                
-                subscriber_response = session.post(
-                    self.subscriber_url,
-                    data=json.dumps(subscription_data),
-                    timeout=30
-                )
-                
-                if subscriber_response.status_code == 201:
-                    print(f"✓ Successfully provisioned {imsi}")
-                    success_count += 1
-                else:
-                    print(f"✗ Failed to provision {imsi}: HTTP {subscriber_response.status_code}")
-                
-                # Small delay between requests
-                if i < count - 1:
-                    time.sleep(2)
-                    
-        except requests.exceptions.RequestException as e:
-            print(f"✗ Error during Open5GS provisioning: {e}")
-            return False
-        
-        return success_count == count
-    
+        indices = list(range(start_index, start_index + count))
+        failed = []
+        with ThreadPoolExecutor(max_workers=min(count, 20)) as pool:
+            futures = {pool.submit(self._provision_one, session, idx): idx for idx in indices}
+            with tqdm(total=count, desc="Provisioning", unit="sub", ncols=80) as pbar:
+                for f in as_completed(futures):
+                    idx, ok = f.result()
+                    if not ok:
+                        failed.append(idx)
+                    pbar.update(1)
+        if failed:
+            logger.warning(f"Failed: {len(failed)}/{count}, indices: {self._format_failed_range(failed)}")
+        return len(failed) == 0
+
     def delete_subscriptions(self, count: int) -> bool:
-        """Delete subscriptions from Open5GS.
-        
-        Args:
-            count (int): Number of subscriptions to delete
-            
-        Returns:
-            bool: True if successful, False otherwise
-        """
-        # Authenticate
+        """Delete subscriptions from Open5GS using concurrent threads."""
         session = self._authenticate()
         if not session:
-            print("✗ Authentication failed, cannot delete subscriptions")
+            logger.error("Authentication failed, cannot delete subscriptions")
             return False
-        
-        print(f"✓ Successfully authenticated with Open5GS")
-        
-        # Always start from INITIAL_IMSI_INDEX
         start_index = self._get_initial_imsi_index()
-        success_count = 0
-        
-        try:
-            for i in range(count):
-                imsi_index = start_index + i
-                imsi = f"{self.plmn_id}{imsi_index:010d}"
-                
-                # Build subscriber API URL according to Open5GS API specification
-                # Format: http://{IP}:{WEBUI_PORT}/api/db/Subscriber/{imsi}
-                delete_url = f"{self.subscriber_url}/{imsi}"
-                
-                # print(f"Deleting subscription {imsi} from Open5GS...")
-                # print(f"   URL: {delete_url}")
-                # print(f"   Authorization: Bearer token (configured)")
-                
-                delete_response = session.delete(delete_url, timeout=30)
-                
-                if delete_response.status_code == 200 or delete_response.status_code == 204:
-                    print(f"✓ Successfully deleted {imsi}")
-                    success_count += 1
-                else:
-                    print(f"✗ Failed to delete {imsi}: HTTP {delete_response.status_code}")
-                    if delete_response.text:
-                        print(f"   Response: {delete_response.text}")
-                
-                # Small delay between requests to avoid overwhelming the API
-                if i < count - 1:
-                    time.sleep(1)
-                    
-        except requests.exceptions.RequestException as e:
-            print(f"✗ Error during Open5GS deletion: {e}")
-            return False
-        
-        print(f"\nDeletion Summary: {success_count}/{count} subscriptions deleted successfully")
-        return success_count == count
+        indices = list(range(start_index, start_index + count))
+        failed = []
+        with ThreadPoolExecutor(max_workers=min(count, 20)) as pool:
+            futures = {pool.submit(self._delete_one, session, idx): idx for idx in indices}
+            with tqdm(total=count, desc="Deleting", unit="sub", ncols=80) as pbar:
+                for f in as_completed(futures):
+                    idx, ok = f.result()
+                    if not ok:
+                        failed.append(idx)
+                    pbar.update(1)
+        if failed:
+            logger.warning(f"Failed: {len(failed)}/{count}, indices: {self._format_failed_range(failed)}")
+        return len(failed) == 0

@@ -7,8 +7,11 @@ using configuration from .env and JSON files.
 
 import json
 import time
-from typing import Dict, Any
+from typing import Dict, Any, Tuple, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
+from tqdm import tqdm
+from loguru import logger
 from core_network.core_network import CoreNetwork
 
 
@@ -53,151 +56,85 @@ class Free5GC(CoreNetwork):
                 result = response.json()
                 self.access_token = result.get("access_token")
                 if self.access_token:
-                    print(f"✓ Successfully authenticated with Free5GC")
+                    logger.info("Successfully authenticated with Free5GC")
                     return True
                 else:
-                    print("✗ Failed to obtain access token from response")
+                    logger.error("Failed to obtain access token from response")
                     return False
             else:
-                print(f"✗ Login failed: HTTP {response.status_code}")
+                logger.error(f"Login failed: HTTP {response.status_code}")
                 return False
                 
         except requests.exceptions.RequestException as e:
-            print(f"✗ Login request failed: {e}")
+            logger.error(f"Login request failed: {e}")
             return False
     
-    def _delete_subscription(self, imsi: str) -> bool:
-        """Delete a subscription from Free5GC.
-        
-        Args:
-            imsi (str): IMSI identifier (e.g., 'imsi-208930000000001')
-            
-        Returns:
-            bool: True if deletion successful, False otherwise
-        """
-        # Build subscriber API URL
+    def _provision_one(self, imsi_index: int) -> Tuple[int, bool]:
+        """Provision a single subscription (thread-safe). Returns (index, success)."""
+        imsi = f"imsi-{self.plmn_id}{imsi_index:010d}"
+        subscription_data = self.subscription_template.copy()
+        subscription_data["ueId"] = imsi
+        subscription_data["plmnID"] = self.plmn_id
+        unique_gpsi = f"msisdn-09{imsi_index:09d}"
+        if "AccessAndMobilitySubscriptionData" in subscription_data:
+            subscription_data["AccessAndMobilitySubscriptionData"]["gpsis"] = [unique_gpsi]
         api_url = f"{self.api_base_url}/subscriber/{imsi}/{self.plmn_id}"
-        
-        # Set up headers with access token
-        headers = {
-            "Content-Type": "application/json;charset=utf-8",
-            "token": self.access_token
-        }
-        
+        headers = {"Content-Type": "application/json;charset=utf-8", "token": self.access_token}
         try:
-            response = requests.delete(
-                url=api_url,
-                headers=headers,
-                timeout=30
-            )
-            
-            if response.status_code == 200 or response.status_code == 204:
-                print(f"✓ Successfully deleted {imsi}")
-                return True
-            else:
-                print(f"✗ Failed to delete {imsi}: HTTP {response.status_code}")
-                print(f"   Response: {response.text}")
-                return False
-                
-        except requests.exceptions.RequestException as e:
-            print(f"✗ Error deleting {imsi}: {e}")
-            return False
+            resp = requests.post(api_url, headers=headers, data=json.dumps(subscription_data), timeout=30)
+            if resp.status_code in (200, 201):
+                return imsi_index, True
+        except Exception:
+            pass
+        return imsi_index, False
+    
+    def _delete_one(self, imsi_index: int) -> Tuple[int, bool]:
+        """Delete a single subscription (thread-safe). Returns (index, success)."""
+        imsi = f"imsi-{self.plmn_id}{imsi_index:010d}"
+        api_url = f"{self.api_base_url}/subscriber/{imsi}/{self.plmn_id}"
+        headers = {"Content-Type": "application/json;charset=utf-8", "token": self.access_token}
+        try:
+            resp = requests.delete(api_url, headers=headers, timeout=30)
+            if resp.status_code in (200, 204):
+                return imsi_index, True
+        except Exception:
+            pass
+        return imsi_index, False
     
     def provision_subscriptions(self, count: int) -> bool:
-        """Provision subscriptions to Free5GC.
-        
-        Args:
-            count (int): Number of subscriptions to provision
-            
-        Returns:
-            bool: True if successful, False otherwise
-        """
-        # First, authenticate to get access token
+        """Provision subscriptions to Free5GC using concurrent threads."""
         if not self._login():
             return False
-        
-        # Always start from INITIAL_IMSI_INDEX
         start_index = self._get_initial_imsi_index()
-        success_count = 0
-        
-        for i in range(count):
-            imsi_index = start_index + i
-            imsi = f"imsi-{self.plmn_id}{imsi_index:010d}"
-            
-            # Create subscription data from template
-            subscription_data = self.subscription_template.copy()
-            subscription_data["ueId"] = imsi
-            subscription_data["plmnID"] = self.plmn_id
-            
-            # Generate unique GPSI based on IMSI index to avoid duplicates
-            # Format: msisdn-09XXXXXXXXX where X is the IMSI index
-            unique_gpsi = f"msisdn-09{imsi_index:09d}"
-            if "AccessAndMobilitySubscriptionData" in subscription_data:
-                subscription_data["AccessAndMobilitySubscriptionData"]["gpsis"] = [unique_gpsi]
-            
-            # Build subscriber API URL
-            api_url = f"{self.api_base_url}/subscriber/{imsi}/{self.plmn_id}"
-            
-            # Set up headers with access token
-            headers = {
-                "Content-Type": "application/json;charset=utf-8",
-                "token": self.access_token
-            }
-            
-            print(f"Provisioning subscription {imsi} to Free5GC...")
-            
-            try:
-                response = requests.post(
-                    url=api_url,
-                    headers=headers,
-                    data=json.dumps(subscription_data),
-                    timeout=30
-                )
-                
-                if response.status_code == 201 or response.status_code == 200:
-                    print(f"✓ Successfully provisioned {imsi}")
-                    success_count += 1
-                else:
-                    print(f"✗ Failed to provision {imsi}: HTTP {response.status_code}")
-                    print(f"   Response: {response.text}")
-                    
-            except requests.exceptions.RequestException as e:
-                print(f"✗ Error provisioning {imsi}: {e}")
-            
-            # Small delay between requests
-            if i < count - 1:
-                time.sleep(2)
-        
-        return success_count == count
+        indices = list(range(start_index, start_index + count))
+        failed = []
+        with ThreadPoolExecutor(max_workers=min(count, 20)) as pool:
+            futures = {pool.submit(self._provision_one, idx): idx for idx in indices}
+            with tqdm(total=count, desc="Provisioning", unit="sub", ncols=80) as pbar:
+                for f in as_completed(futures):
+                    idx, ok = f.result()
+                    if not ok:
+                        failed.append(idx)
+                    pbar.update(1)
+        if failed:
+            logger.warning(f"Failed: {len(failed)}/{count}, indices: {self._format_failed_range(failed)}")
+        return len(failed) == 0
     
     def delete_subscriptions(self, count: int) -> bool:
-        """Delete subscriptions from Free5GC.
-        
-        Args:
-            count (int): Number of subscriptions to delete
-            
-        Returns:
-            bool: True if successful, False otherwise
-        """
-        # First, authenticate to get access token
+        """Delete subscriptions from Free5GC using concurrent threads."""
         if not self._login():
             return False
-        
-        # Always start from INITIAL_IMSI_INDEX
         start_index = self._get_initial_imsi_index()
-        success_count = 0
-        
-        for i in range(count):
-            imsi_index = start_index + i
-            imsi = f"imsi-{self.plmn_id}{imsi_index:010d}"
-            
-            print(f"Deleting subscription {imsi} from Free5GC...")
-            
-            if self._delete_subscription(imsi):
-                success_count += 1
-            
-            # Small delay between requests
-            if i < count - 1:
-                time.sleep(1)
-        
-        return success_count == count
+        indices = list(range(start_index, start_index + count))
+        failed = []
+        with ThreadPoolExecutor(max_workers=min(count, 20)) as pool:
+            futures = {pool.submit(self._delete_one, idx): idx for idx in indices}
+            with tqdm(total=count, desc="Deleting", unit="sub", ncols=80) as pbar:
+                for f in as_completed(futures):
+                    idx, ok = f.result()
+                    if not ok:
+                        failed.append(idx)
+                    pbar.update(1)
+        if failed:
+            logger.warning(f"Failed: {len(failed)}/{count}, indices: {self._format_failed_range(failed)}")
+        return len(failed) == 0

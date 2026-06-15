@@ -176,9 +176,14 @@ def plmn_bcd_decode(bcd_bytes):
 # Helper Functions (from 5gregpdu/message/message.py)
 # ============================================================================
 
-def fgmm_security_protected_nas_message(CiphAlgo, IntegAlgo, k_nas_enc, k_nas_int, secModeMsg, is_pdu=False, is_service_request=False):
+def fgmm_security_protected_nas_message(CiphAlgo, IntegAlgo, k_nas_enc, k_nas_int, secModeMsg, is_pdu=False, is_service_request=False, is_smc=False):
     """
     Create security protected NAS message with proper header and encryption/integrity protection.
+    
+    SecHdr selection per TS 24.501 Table 9.2.1:
+      1 - Service Request
+      2 - Integrity protected (all messages except SMC and Service Request)
+      4 - Security Mode Complete (new 5G NAS security context)
     """
     try:
         from pycrate_mobile.TS24501_FGMM import FGMMSecProtNASMessage
@@ -188,10 +193,14 @@ def fgmm_security_protected_nas_message(CiphAlgo, IntegAlgo, k_nas_enc, k_nas_in
     IEs = {}
     if is_service_request:
         IEs['5GMMHeaderSec'] = {'EPD': 126, 'spare': 0, 'SecHdr': 1}
-    elif CiphAlgo != 0 or is_pdu:
-        IEs['5GMMHeaderSec'] = {'EPD': 126, 'spare': 0, 'SecHdr': 2}
-    else:
+    elif is_smc:
+        # SecHdr=4: integrity protected and ciphered with new 5G NAS security context
+        # Used ONLY for Security Mode Complete per TS 24.501
         IEs['5GMMHeaderSec'] = {'EPD': 126, 'spare': 0, 'SecHdr': 4}
+    else:
+        # SecHdr=2: integrity protected
+        # Used for all other security-protected messages (Registration Complete, UL NAS Transport, etc.)
+        IEs['5GMMHeaderSec'] = {'EPD': 126, 'spare': 0, 'SecHdr': 2}
     
     SecMsg = FGMMSecProtNASMessage(val=IEs)
     SecMsg['NASMessage'].set_val(secModeMsg)
@@ -262,7 +271,7 @@ def fgmm_registration_complete_message():
     return RegCompleteMsg.to_bytes()
 
 
-def fgsm_pdu_session_establishment_request_message():
+def fgsm_pdu_session_establishment_request_message(pdu_sess_id=1):
     """
     Create PDU session establishment request message.
     """
@@ -273,7 +282,7 @@ def fgsm_pdu_session_establishment_request_message():
     
     smIEs = {}
     # TODO: PTI 是用户事务的唯一标识，不同用户需要不同的 PTI，以确保事务的唯一性和关联性。
-    smIEs['5GSMHeader'] = {'Type': 193, 'PTI': 1}
+    smIEs['5GSMHeader'] = {'PDUSessID': pdu_sess_id, 'Type': 193, 'PTI': 1}
     smIEs['PDUSessType'] = {'Value': 1}  # PDU Session Type: IPv4
     smIEs['SSCMode'] = {'Value': 1}
     smIEs['5GSMCap'] = {'TPMIC': 0, 'ATSSS-ST': 0, 'EPT-S1': 0, 'MH6-PDU': 0, 'RQoS': 0}
@@ -284,7 +293,7 @@ def fgsm_pdu_session_establishment_request_message():
     return PduSessEstabReq.to_bytes()
 
 
-def fgmm_ul_nas_transport_message(pduSessEstablishmentReq, dnn=b'internet', snssai={'SST': 1}): 
+def fgmm_ul_nas_transport_message(pduSessEstablishmentReq, dnn=b'internet', snssai={'SST': 1}, pdu_sess_id=1): 
     """
     Create UL NAS transport message with proper SNSSAI and DNN handling.
     """
@@ -295,7 +304,7 @@ def fgmm_ul_nas_transport_message(pduSessEstablishmentReq, dnn=b'internet', snss
     
     ulIEs = {}
     ulIEs['5GMMHeader'] = {'EPD': 126, 'spare': 0, 'SecHdr': 0, 'Type': 103}
-    ulIEs['PDUSessID'] = 1
+    ulIEs['PDUSessID'] = pdu_sess_id
     ulIEs['RequestType'] = 1
     ulIEs['SNSSAI'] = {'SST': snssai["SST"]}  # Service Data
     if snssai.get("SD"):
@@ -305,11 +314,12 @@ def fgmm_ul_nas_transport_message(pduSessEstablishmentReq, dnn=b'internet', snss
     ULNasTransportMsg['PayloadContainer']['V'].set_val(pduSessEstablishmentReq)
     # ULNasTransportMsg['DNN'].set_val({'T': 0x25, 'V': dnn})
 
-    # mamually set DNN, because of the bug in to_bytes method makes dnn information lost
-    # fomat is 25[length of the DNN + length of the Length field)][length of the DNN][DNN]
+    # manually set DNN, because of the bug in to_bytes method makes dnn information lost
+    # format is 25[length of the DNN + length of the Length field)][length of the DNN][DNN]
     # for example, if DNN is "internet", the length of the DNN is 8, the length of the Length field is 1, 
     # the hex of DNN is 696e7465726e6574, so the DNN message is 250908696e7465726e6574
-    dnn = b"internet"
+    if isinstance(dnn, str):
+        dnn = dnn.encode()
     dnn_str_len = len(dnn)
     dnn_msg = f"25{hex(dnn_str_len + 1)[2:].zfill(2)}{hex(dnn_str_len)[2:].zfill(2)}" + dnn.hex()
     dnn_msg = bytes.fromhex(dnn_msg)
@@ -329,14 +339,34 @@ def NGAPSetupReqeust(plmn, gnb_name, gnb_id, gnb_id_len, tac, sst=0x1, sd=None):
     val = ('initiatingMessage', {'procedureCode': 21, 'criticality': 'reject', 'value': ('NGSetupRequest', {'protocolIEs': IEs})})
     return val  
 
-def InitialUEMessage(plmn_bcd: bytes, tac: str, imsi_bcd: bytes, nr_cell_id=1, ran_ue_ngap_id=1):
+def InitialUEMessage(plmn_bcd: bytes, tac: str, nr_cell_id=1, ran_ue_ngap_id=1,
+                     slices=None, supi=None):
     """
-    gNB->AMF, Initial UE Message
+    gNB->AMF, Initial UE Message (TS 38.413 section 8.6.2)
+    
+    Uses pycrate-based fgmm_registration_request_message() for proper NAS-PDU
+    construction instead of hardcoded hex.
     """
+    plmn = plmn_bcd_decode(plmn_bcd)
+    
+    # Build NAS Registration Request using pycrate (produces correct encoding)
+    msin = supi[-10:] if supi else '0000000001'
+    nssai = slices if slices else [{'SST': 1}]
+    nas_pdu = fgmm_registration_request_message(
+        msin=msin,
+        plmn=plmn,
+        nssai=nssai
+    )
+    
     IEs = []
     IEs.append({'id': 85, 'criticality': 'reject', 'value': ('RAN-UE-NGAP-ID', ran_ue_ngap_id)})
-    IEs.append({'id': 38, 'criticality': 'reject', 'value': ('NAS-PDU', bytes.fromhex(f'7e00417c000d01{plmn_bcd.hex()}00000000{imsi_bcd.hex()}2e0480c0f0f0'))})
-    IEs.append({'id': 121, 'criticality': 'reject', 'value': ('UserLocationInformation', ('userLocationInformationNR', {'tAI': {'pLMNIdentity': plmn_bcd, 'tAC': bytes.fromhex(tac)},'nR-CGI': {'pLMNIdentity': plmn_bcd, 'nRCellIdentity': (nr_cell_id, 36)}}))})
+    IEs.append({'id': 38, 'criticality': 'reject', 'value': ('NAS-PDU', nas_pdu)})
+    IEs.append({'id': 121, 'criticality': 'reject', 'value': ('UserLocationInformation',
+        ('userLocationInformationNR', {
+            'nR-CGI': {'pLMNIdentity': plmn_bcd, 'nRCellIdentity': (nr_cell_id, 36)},
+            'tAI': {'pLMNIdentity': plmn_bcd, 'tAC': bytes.fromhex(tac)},
+            'timeStamp': (int(time.time()) + 2208988800).to_bytes(4, byteorder='big')
+        }))})
     IEs.append({'id': 90, 'criticality': 'ignore', 'value': ('RRCEstablishmentCause', 'mo-Signalling')})
     IEs.append({'id': 112, 'criticality': 'ignore', 'value': ('UEContextRequest', "requested")})
     val = ('initiatingMessage', {'procedureCode': 15, 'criticality': 'ignore', 'value': ('InitialUEMessage', {'protocolIEs': IEs})})
@@ -406,7 +436,7 @@ def SecurityModeCompleteMessage(amf_ue_ngap_id, kseaf, plmn_bcd: bytes, slices, 
         nssai=[slices]
     )
     secModeMsg = fgmm_security_mode_command_message(regReqMsg, imeisv)
-    secProtNasMsg = fgmm_security_protected_nas_message(ciphAlgo, ntegAlgo, k_nas_enc, k_nas_int, secModeMsg)
+    secProtNasMsg = fgmm_security_protected_nas_message(ciphAlgo, ntegAlgo, k_nas_enc, k_nas_int, secModeMsg, is_smc=True)
     nas_encoded = secProtNasMsg.hex()
     
     IEs = []
@@ -455,10 +485,10 @@ def RegistrationCompleteMessage(amf_ue_ngap_id, k_nas_int, k_nas_enc, plmn_bcd, 
     val = ('initiatingMessage', {'procedureCode': 46, 'criticality': 'ignore', 'value': ('UplinkNASTransport', {'protocolIEs': IEs})})
     return val
 
-def PDUSessionEstablishmentRequestMessage(amf_ue_ngap_id, k_nas_int, k_nas_enc, plmn_bcd, slices, dnn, ran_ue_ngap_id=1, tac="000001", ciphAlgo=0, ntegAlgo=2, gnb_id=1):
+def PDUSessionEstablishmentRequestMessage(amf_ue_ngap_id, k_nas_int, k_nas_enc, plmn_bcd, slices, dnn, ran_ue_ngap_id=1, tac="000001", ciphAlgo=0, ntegAlgo=2, gnb_id=1, pdu_sess_id=1):
     # Use the helper functions for cleaner implementation following original pattern
-    pduSessEstablishmentReq = fgsm_pdu_session_establishment_request_message()
-    ulNasTransportMsg = fgmm_ul_nas_transport_message(pduSessEstablishmentReq, dnn=dnn, snssai=slices)
+    pduSessEstablishmentReq = fgsm_pdu_session_establishment_request_message(pdu_sess_id=pdu_sess_id)
+    ulNasTransportMsg = fgmm_ul_nas_transport_message(pduSessEstablishmentReq, dnn=dnn, snssai=slices, pdu_sess_id=pdu_sess_id)
     secProtNasMsg = fgmm_security_protected_nas_message(ciphAlgo, ntegAlgo, k_nas_enc, k_nas_int, ulNasTransportMsg, is_pdu=True)
     
     nas_encoded = secProtNasMsg.hex()
@@ -515,12 +545,12 @@ def PDUSessionResourceSetupRequestMessage(pdu_dict):
     qosFlowIdentifier = ie_136['value'][1][0]['qosFlowIdentifier']
     return ipv4_str, gTP_TEID, qosFlowIdentifier, snssai_dict, DNN, PDUSessID
 
-def PDUSessResourceSetupResponseMessage(amf_ue_ngap_id, qosFlowIdentifier, plmn_bcd, gnb_ip="192.168.55.9", gnb_teid=2, ran_ue_ngap_id=1, tac="000001"):
+def PDUSessResourceSetupResponseMessage(amf_ue_ngap_id, qosFlowIdentifier, plmn_bcd, gnb_ip="192.168.55.9", gnb_teid=2, ran_ue_ngap_id=1, tac="000001", pdu_sess_id=1):
     ip_obj = ipaddress.ip_address(gnb_ip)
     IEs = []
     IEs.append({'id': 10, 'criticality': 'ignore', 'value': ('AMF-UE-NGAP-ID', amf_ue_ngap_id)})
     IEs.append({'id': 85, 'criticality': 'ignore', 'value': ('RAN-UE-NGAP-ID', ran_ue_ngap_id)})
-    IEs.append({'id': 75, 'criticality': 'ignore', 'value':   ('PDUSessionResourceSetupListSURes', [{'pDUSessionID': 1, 'pDUSessionResourceSetupResponseTransfer': bytes.fromhex(f'0003e0{ip_obj.packed.hex()}{int_to_hex8(2)}{int_to_hex4(qosFlowIdentifier)}')}])})
+    IEs.append({'id': 75, 'criticality': 'ignore', 'value':   ('PDUSessionResourceSetupListSURes', [{'pDUSessionID': pdu_sess_id, 'pDUSessionResourceSetupResponseTransfer': bytes.fromhex(f'0003e0{ip_obj.packed.hex()}{int_to_hex8(2)}{int_to_hex4(qosFlowIdentifier)}')}])})
 
     val = ('successfulOutcome', {'procedureCode': 29, 'criticality': 'reject', 'value': ('PDUSessionResourceSetupResponse', {'protocolIEs': IEs})})
     return val 
