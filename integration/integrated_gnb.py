@@ -140,6 +140,10 @@ class IntegratedGNB:
         self.running = True
         self.ran_ue_ngap_idx = 1
         
+        # Callback: API sets this to get notified on UE state changes (e.g. context released by AMF)
+        # Signature: callback(ue_index: int, ue, event_name: str)
+        self.on_ue_state_change = None
+        
         # SCTP socket and PDU
         self.sctp_socket = None
         self.PDU = NGAP_PDU_Descriptions.NGAP_PDU
@@ -264,15 +268,18 @@ class IntegratedGNB:
 
     def send_message(self, message):
         """Send NGAP message to AMF."""
+        proc_code = message[1].get('procedureCode', 'N/A') if isinstance(message, tuple) and len(message) > 1 else 'N/A'
         try:
             with self.socket_lock:
                 self.PDU.set_val(message)
                 data = self.PDU.to_aper()
+            logger.debug(f"[GNB.send] procedureCode={proc_code}, bytes={len(data)}")
             self.sctp_socket.sctp_send(data, ppid=socket.htonl(60))
         except Exception as e:
             import traceback
-            logger.error(f"Failed to send message: {e}")
+            logger.error(f"Failed to send message (procCode={proc_code}): {e}")
             logger.error(traceback.format_exc())
+            raise
 
     def _start_threads(self):
         """Start message processing threads."""
@@ -290,7 +297,10 @@ class IntegratedGNB:
             try:
                 data = self.sctp_socket.recv(4096)
                 if not data:
-                    break
+                    if self.running:
+                        logger.warning("Acceptor: empty recv (peer may have closed), retrying in 1s")
+                        time.sleep(1)
+                    continue
                 
                 # Properly decode NGAP PDU to extract RAN UE NGAP ID
                 # Use socket_lock to protect shared PDU object
@@ -329,10 +339,14 @@ class IntegratedGNB:
                 handler_thread.daemon = True
                 handler_thread.start()
                 
+            except OSError as e:
+                if self.running:
+                    logger.warning(f"Acceptor: socket error ({e}), retrying in 1s")
+                    time.sleep(1)
             except Exception as e:
                 if self.running:
                     logger.error(f"Error in acceptor: {e}")
-                break
+                    time.sleep(0.5)
 
     def _sender(self):
         """Send queued messages to AMF."""
@@ -341,12 +355,23 @@ class IntegratedGNB:
             try:
                 message = self.message_queue.get(timeout=1)
                 logger.debug(f"[Sender] Sending message: procedureCode={message[1].get('procedureCode', 'N/A')}")
-                self.send_message(message)
-                logger.debug(f"[Sender] Message sent successfully")
+                try:
+                    self.send_message(message)
+                    logger.debug(f"[Sender] Message sent successfully")
+                except Exception as send_err:
+                    logger.warning(f"[Sender] Send failed ({send_err}), attempting reconnect...")
+                    try:
+                        self.reconnect()
+                        self.send_message(message)
+                        logger.info(f"[Sender] Message sent after reconnect")
+                    except Exception as retry_err:
+                        logger.error(f"[Sender] Retry after reconnect failed: {retry_err}")
             except queue.Empty:
                 continue
             except Exception as e:
-                logger.error(f"Error in sender: {e}")
+                if self.running:
+                    logger.error(f"Error in sender: {e}")
+                    time.sleep(0.5)
 
     def _ngap_message_handler(self, data, idx):
         """Handle NGAP message for specific UE."""
@@ -360,11 +385,31 @@ class IntegratedGNB:
             type_t, pdu_dict = PDU()
             
             with self.socket_lock:
-                ue, messages = self.ues[idx].handle_message(type_t, pdu_dict)
+                ue = self.ues[idx]
+                was_registered = ue.registered
+                was_connected = ue.dnn_internet_connected
+                
+                ue, messages = ue.handle_message(type_t, pdu_dict)
                 self.ues[idx] = ue
                 
                 for message in messages:
                     self.message_queue.put(message)
+            
+            # Detect proactive AMF-initiated context release
+            if was_registered and not ue.registered:
+                logger.info(f"[GNB] UE#{idx} context released by AMF (was registered, now not)")
+                if self.on_ue_state_change:
+                    try:
+                        self.on_ue_state_change(idx, ue, "context_released_by_amf")
+                    except Exception as cb_err:
+                        logger.warning(f"[GNB] on_ue_state_change callback error: {cb_err}")
+            elif was_connected and not ue.dnn_internet_connected and ue.registered:
+                logger.info(f"[GNB] UE#{idx} PDU session released by AMF")
+                if self.on_ue_state_change:
+                    try:
+                        self.on_ue_state_change(idx, ue, "pdu_released_by_amf")
+                    except Exception as cb_err:
+                        logger.warning(f"[GNB] on_ue_state_change callback error: {cb_err}")
                     
         except Exception as e:
             logger.error(f"Error handling message for UE {idx}: {e}")
@@ -438,14 +483,85 @@ class IntegratedGNB:
         except Exception as e:
             logger.warning(f"Error handling Paging message: {e}")
 
+    def reconnect(self):
+        """Re-establish the SCTP connection and restart sender/acceptor threads.
+        
+        Called when the socket has been closed (e.g. after a previous test run)
+        but the API server needs to send further UE actions (release-pdu,
+        deregister, user-inactivity, etc.).
+        """
+        logger.info("Reconnecting gNB SCTP socket...")
+        try:
+            # Close old socket if still open
+            if self.sctp_socket:
+                try:
+                    self.sctp_socket.shutdown(socket.SHUT_RDWR)
+                    self.sctp_socket.close()
+                except Exception:
+                    pass
+
+            # Create new socket, bind, connect, NG Setup
+            self.sctp_socket = sctp.sctpsocket_tcp(socket.AF_INET)
+            self.sctp_socket.bind((self.gnb_address, 0))
+            self.sctp_socket.connect((self.amf_address, self.amf_port))
+
+            self.PDU = NGAP_PDU_Descriptions.NGAP_PDU
+            self.PDU.set_val(NGAPSetupReqeust(
+                self.mcc + self.mnc,
+                self.gnb_name,
+                self.gnb_id,
+                self.gnb_id_len,
+                tac=self.tac,
+                sst=self.slices["SST"],
+                sd=self.slices.get("SD", None)
+            ))
+            self.sctp_socket.sctp_send(self.PDU.to_aper(), ppid=socket.htonl(NGAP_PPID))
+
+            data = self.sctp_socket.recv(4096)
+            if not data:
+                raise Exception("No NG Setup Response after reconnect")
+
+            self.PDU.from_aper(data)
+            _, pdu_dict = self.PDU()
+            self.process_ngap_setup_response(pdu_dict)
+            logger.info(f"Reconnected to AMF: {self.gnb_amf}")
+
+            # Restart running flag and threads
+            self.running = True
+            if not self.message_thread or not self.message_thread.is_alive():
+                self.message_thread = threading.Thread(target=self._acceptor, daemon=True)
+                self.message_thread.start()
+            if not self.sender_thread or not self.sender_thread.is_alive():
+                self.sender_thread = threading.Thread(target=self._sender, daemon=True)
+                self.sender_thread.start()
+
+        except Exception as e:
+            logger.error(f"Reconnect failed: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
+
+    def is_socket_alive(self):
+        """Check whether the SCTP socket appears to be connected."""
+        if not self.sctp_socket:
+            return False
+        try:
+            # A non-blocking peek; if it raises with EBADF / ENOTCONN, socket is dead
+            self.sctp_socket.getpeername()
+            return True
+        except Exception:
+            return False
+
     def close(self):
         """Close gNB connection gracefully.
         
         Waits for pending messages (e.g. UEContextReleaseComplete) to be
         dequeued by the sender thread, then adds a small flush delay to
         ensure they are transmitted before the socket is shut down.
+        Idempotent — safe to call multiple times.
         """
-        import time
+        if not self.running and not self.sctp_socket:
+            return  # Already closed
         # Wait for message queue to drain (up to 2 seconds)
         deadline = time.time() + 2.0
         while not self.message_queue.empty() and time.time() < deadline:
@@ -457,8 +573,9 @@ class IntegratedGNB:
             try:
                 self.sctp_socket.shutdown(socket.SHUT_RDWR)
                 self.sctp_socket.close()
-            except:
+            except Exception:
                 pass
+            self.sctp_socket = None
 
 
 class GNBAMF:

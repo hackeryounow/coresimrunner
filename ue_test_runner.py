@@ -130,6 +130,14 @@ class UETestRunner:
         # Configure logger
         self._setup_logger()
 
+    def close(self):
+        """Explicitly close the gNB connection (called by API stop endpoint)."""
+        if self.gnb:
+            try:
+                self.gnb.close()
+            except Exception as e:
+                logger.error(f"Error closing gNB: {e}")
+
     def _get_config_value(self, key: str, default: str = None) -> str:
         """Get configuration value from .env file with proper handling of quoted strings."""
         value = self.config_loader.get(key, default)
@@ -153,13 +161,15 @@ class UETestRunner:
             format="<green>{time:YYYY-MM-DD HH:mm:ss}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>"
         )
     
-    def run_test(self, cancel_event=None, action=None) -> bool:
+    def run_test(self, cancel_event=None, action=None, keep_alive=False) -> bool:
         """
         Execute the multi-UE concurrent registration and PDU session test.
         
         Args:
             cancel_event: threading.Event — when set, aborts the test immediately.
             action: Optional action after registration+PDU: 'deregister', 'release-pdu', 'service-request'
+            keep_alive: If True, do NOT close the gNB socket after test completes
+                        (required when the API server needs to send further UE actions).
         
         Returns:
             bool: True if all UEs successfully registered and established PDU sessions
@@ -244,8 +254,9 @@ class UETestRunner:
             traceback.print_exc()
             return False
         finally:
-            # Cleanup
-            if self.gnb:
+            # Cleanup: only close the socket if NOT being kept alive for
+            # subsequent UE actions (e.g. release-pdu, deregister, user-inactivity).
+            if not keep_alive and self.gnb:
                 try:
                     self.gnb.close()
                 except:
