@@ -76,7 +76,8 @@ class IntegratedGNB:
                  ciphAlgo: int = 0,
                  ntegAlgo: int = 2,
                  logging_level: str = 'INFO',
-                 enable_ims: bool = False):
+                 enable_ims: bool = False,
+                 ue_init_delay: float = 0.3):
         """
         Initialize the integrated gNB simulator.
         
@@ -130,6 +131,7 @@ class IntegratedGNB:
         self.ntegAlgo = ntegAlgo
         self.logging_level = logging_level
         self.enable_ims = enable_ims
+        self.ue_init_delay = ue_init_delay
         
         # Internal state
         self.gnb_amf = None
@@ -218,6 +220,7 @@ class IntegratedGNB:
         for ue in self.ues:
             initial_message = ue.send_initial_ue_message()
             self.message_queue.put(initial_message)
+            time.sleep(self.ue_init_delay)
 
     def _setup_gnb(self):
         """Setup gNB connection to AMF."""
@@ -273,8 +276,9 @@ class IntegratedGNB:
             with self.socket_lock:
                 self.PDU.set_val(message)
                 data = self.PDU.to_aper()
+                # Send inside the lock to prevent race with reconnect
+                self.sctp_socket.sctp_send(data, ppid=socket.htonl(60))
             logger.debug(f"[GNB.send] procedureCode={proc_code}, bytes={len(data)}")
-            self.sctp_socket.sctp_send(data, ppid=socket.htonl(60))
         except Exception as e:
             import traceback
             logger.error(f"Failed to send message (procCode={proc_code}): {e}")
@@ -311,10 +315,11 @@ class IntegratedGNB:
                 
                 procedure_code = pdu_dict['procedureCode']
                 
-                # Skip error indications
+                # Handle special procedure types
                 try:
                     proc = ProcedureCode(procedure_code)
                     if proc == ProcedureCode.ID_ERROR_INDICATION:
+                        self._handle_error_indication(pdu_dict)
                         continue
                     if proc == ProcedureCode.ID_PAGING:
                         # Handle Paging: extract 5G-S-TMSI and match to a UE
@@ -359,13 +364,20 @@ class IntegratedGNB:
                     self.send_message(message)
                     logger.debug(f"[Sender] Message sent successfully")
                 except Exception as send_err:
-                    logger.warning(f"[Sender] Send failed ({send_err}), attempting reconnect...")
-                    try:
-                        self.reconnect()
-                        self.send_message(message)
-                        logger.info(f"[Sender] Message sent after reconnect")
-                    except Exception as retry_err:
-                        logger.error(f"[Sender] Retry after reconnect failed: {retry_err}")
+                    logger.warning(f"[Sender] Send failed ({send_err}), message dropped — use _ensure_gnb_alive before actions")
+                    # Do NOT reconnect from the sender thread.
+                    # Reconnection is handled by _ensure_gnb_alive() called from the action handler,
+                    # which properly coordinates threads and NG Setup.
+                    # Drain remaining messages to avoid repeated failures.
+                    drained = 0
+                    while not self.message_queue.empty():
+                        try:
+                            self.message_queue.get_nowait()
+                            drained += 1
+                        except queue.Empty:
+                            break
+                    if drained > 0:
+                        logger.warning(f"[Sender] Drained {drained} pending messages after send failure")
             except queue.Empty:
                 continue
             except Exception as e:
@@ -438,6 +450,67 @@ class IntegratedGNB:
             logger.warning(f"Failed to extract RAN UE NGAP ID: {e}")
             return None
 
+    def _handle_error_indication(self, pdu_dict):
+        """Handle ErrorIndication from AMF.
+        
+        When the AMF responds with cause 'unknown-local-UE-NGAP-ID', it means the AMF
+        has already released the UE context. We must update the UE state accordingly
+        so subsequent actions (release/deregister) don't retry and fail.
+        """
+        try:
+            protocol_ies = pdu_dict['value'][1]['protocolIEs']
+            ran_ue_ngap_id = self._extract_ran_ue_ngap_id_from_ies(protocol_ies)
+            
+            # Extract cause
+            cause_str = None
+            for ie in protocol_ies:
+                if ie['id'] == 15:  # Cause
+                    cause_val = ie['value'][1]
+                    if isinstance(cause_val, tuple) and len(cause_val) == 2:
+                        cause_str = cause_val[0]  # e.g., 'radioNetwork'
+                        cause_detail = cause_val[1]  # e.g., ('unknown-local-UE-NGAP-ID', 14)
+                        if isinstance(cause_detail, tuple):
+                            cause_str = f"{cause_str}:{cause_detail[0]}"
+                        else:
+                            cause_str = f"{cause_str}:{cause_detail}"
+                    break
+            
+            logger.warning(
+                f"[GNB] ErrorIndication received: RAN-UE-NGAP-ID={ran_ue_ngap_id}, cause={cause_str}"
+            )
+            
+            if ran_ue_ngap_id is None:
+                return
+            
+            idx = ran_ue_ngap_id - 1
+            if idx < 0 or idx >= len(self.ues):
+                return
+            
+            ue = self.ues[idx]
+            ue_id = getattr(ue, 'supi', f'UE#{idx}')
+            
+            # Check if this is an "unknown UE" error → AMF has released the context
+            is_unknown_ue = (cause_str and 'unknown-local-UE-NGAP-ID' in str(cause_str))
+            
+            if is_unknown_ue and ue.registered:
+                logger.warning(
+                    f"[GNB] AMF reports unknown UE context for {ue_id} — "
+                    f"marking as context_released"
+                )
+                ue.registered = False
+                ue.context_released = True
+                ue.dnn_internet_connected = False
+                ue.dnn2_ims_connected = False
+                
+                if self.on_ue_state_change:
+                    try:
+                        self.on_ue_state_change(idx, ue, "error_unknown_ue_ngap_id")
+                    except Exception as cb_err:
+                        logger.warning(f"[GNB] on_ue_state_change callback error: {cb_err}")
+            
+        except Exception as e:
+            logger.warning(f"Error handling ErrorIndication: {e}")
+
     def _handle_paging(self, pdu_dict):
         """Handle Paging message from AMF: extract 5G-S-TMSI and match to a UE.
         
@@ -475,6 +548,7 @@ class IntegratedGNB:
                 for ue in self.ues:
                     if ue.ue_5g_guti and ue.ue_5g_guti.tmsi == paging_tmsi:
                         ue.paging_received = True
+                        ue.paging_event.set()
                         logger.info(f"Paging matched to UE {ue.supi} (TMSI=0x{paging_tmsi:08x})")
                         return
             
@@ -489,9 +563,16 @@ class IntegratedGNB:
         Called when the socket has been closed (e.g. after a previous test run)
         but the API server needs to send further UE actions (release-pdu,
         deregister, user-inactivity, etc.).
+        
+        IMPORTANT: This method stops old threads before starting new ones
+        to avoid duplicate sender/acceptor threads.
         """
         logger.info("Reconnecting gNB SCTP socket...")
         try:
+            # Stop old threads first
+            self.running = False
+            time.sleep(0.5)  # Give threads time to notice running=False
+            
             # Close old socket if still open
             if self.sctp_socket:
                 try:
@@ -499,6 +580,7 @@ class IntegratedGNB:
                     self.sctp_socket.close()
                 except Exception:
                     pass
+                self.sctp_socket = None
 
             # Create new socket, bind, connect, NG Setup
             self.sctp_socket = sctp.sctpsocket_tcp(socket.AF_INET)
@@ -526,14 +608,24 @@ class IntegratedGNB:
             self.process_ngap_setup_response(pdu_dict)
             logger.info(f"Reconnected to AMF: {self.gnb_amf}")
 
-            # Restart running flag and threads
+            # Drain stale messages from queue
+            drained = 0
+            while not self.message_queue.empty():
+                try:
+                    self.message_queue.get_nowait()
+                    drained += 1
+                except queue.Empty:
+                    break
+            if drained > 0:
+                logger.info(f"[Reconnect] Drained {drained} stale messages from queue")
+
+            # Restart running flag and always start fresh threads
             self.running = True
-            if not self.message_thread or not self.message_thread.is_alive():
-                self.message_thread = threading.Thread(target=self._acceptor, daemon=True)
-                self.message_thread.start()
-            if not self.sender_thread or not self.sender_thread.is_alive():
-                self.sender_thread = threading.Thread(target=self._sender, daemon=True)
-                self.sender_thread.start()
+            self.message_thread = threading.Thread(target=self._acceptor, daemon=True)
+            self.message_thread.start()
+            self.sender_thread = threading.Thread(target=self._sender, daemon=True)
+            self.sender_thread.start()
+            logger.info("[Reconnect] Fresh sender and acceptor threads started")
 
         except Exception as e:
             logger.error(f"Reconnect failed: {e}")

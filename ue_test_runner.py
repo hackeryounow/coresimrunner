@@ -53,7 +53,8 @@ class UETestRunner:
                  tac: str = "000001",
                  gnb_id: int = 513,
                  gnb_nr_cell_id: int = None,
-                 log_level: str = "INFO"):
+                 log_level: str = "INFO",
+                 ue_init_delay: float = 0.3):
         """
         Initialize the UE test runner.
         
@@ -88,12 +89,13 @@ class UETestRunner:
         self.start_imsi = start_imsi or f"{self.config_loader.get_int('INITIAL_IMSI_INDEX', 1):010d}"
         self.ki = ki or self.config_loader.get("PERMANENT_KEY", "12341234123412341234123412340000")
         self.opc = opc or self.config_loader.get("OPC_VALUE", "71a121bb69baf3c0cc53fb5038a0131f")
-        self.dnn = dnn or self._get_config_value("DNN", "internet")
+        self.dnn = dnn or self._get_config_value("DNN") or self._get_config_value("DATA_NETWORK_NAME", "internet")
         self.amf_port = amf_port
         self.tac = tac
         self.gnb_id = gnb_id
         self.gnb_nr_cell_id = gnb_nr_cell_id or self.config_loader.get_int("GNB_NR_CELL_ID", 1)
         self.log_level = log_level
+        self.ue_init_delay = ue_init_delay
         
         # IMS (DNN2) configuration
         ims_val = self._get_config_value("ENABLE_IMS", "false")
@@ -198,7 +200,8 @@ class UETestRunner:
                 opc=self.opc,
                 dnn=self.dnn,
                 logging_level=self.log_level,
-                enable_ims=self.enable_ims
+                enable_ims=self.enable_ims,
+                ue_init_delay=self.ue_init_delay
             )
             
             # Start the test

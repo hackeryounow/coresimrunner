@@ -239,6 +239,10 @@ class ConfigLoader:
             base_config["subscription_template"] = self.load_json_file("FREE5GC_SUBSCRIPTION_TEMPLATE")
         elif core_network == "open5gs":
             base_config["subscription_template"] = self.load_json_file("OPEN5GS_SUBSCRIPTION_TEMPLATE")
+            msisdn_prefixes_str = self.get("MSISDN_PREFIXES", "133")
+            base_config["msisdn_prefixes"] = [p.strip() for p in msisdn_prefixes_str.split(",") if p.strip()]
+            base_config["msisdn_length"] = self.get_int("MSISDN_LENGTH", 11)
+            base_config["enable_ims"] = self.get("ENABLE_IMS", "false").lower() in ("true", "1", "yes")
         else:
             # For custom or other types, use Free5GC template as default
             base_config["subscription_template"] = self.load_json_file("FREE5GC_SUBSCRIPTION_TEMPLATE")

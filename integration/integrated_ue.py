@@ -155,6 +155,14 @@ class IntegratedUE:
         self.paging_received = False     # Set True when Paging received from AMF (for Open5GS service request flow)
         self.session_info = {}
         
+        # Precise timing events — signaled by the acceptor thread when state changes
+        self.deregister_event = threading.Event()       # set when registered becomes False
+        self.pdu_release_event = threading.Event()      # set when dnn_internet_connected becomes False
+        self.service_accept_event = threading.Event()   # set when service_accepted becomes True
+        self.context_release_event = threading.Event()  # set when context_released becomes True
+        self.paging_event = threading.Event()           # set when paging_received becomes True
+        self.pdu_establish_event = threading.Event()    # set when dnn_internet_connected becomes True
+        
         # Latency tracking - protocol phase timestamps
         self.t_start = None        # Initial UE Message sent (RRC + Registration Request)
         self.t_rrc = None          # First DL NAS response (AMF reachable)
@@ -243,7 +251,8 @@ class IntegratedUE:
                     # so that UEContextReleaseComplete is sent before connection closes.
                     self.dnn_internet_connected = False
                     self.dnn2_ims_connected = False
-                    logger.info(f"\u2713 UE {self.supi} deregistration accepted by network")
+                    self.pdu_release_event.set()
+                    logger.info(f"✓ UE {self.supi} deregistration accepted by network")
                     
                 elif message_type == MessageType.SERVICE_ACCEPT:
                     # Handle Service Accept via DownlinkNASTransport (proc 4)
@@ -260,6 +269,7 @@ class IntegratedUE:
                             if new_amf_id is not None:
                                 self.amf_ue_ngap_id = new_amf_id
                     self.service_accepted = True
+                    self.service_accept_event.set()
                     self.registered = True
                     self.context_released = False
                     logger.info(f"\u2713 UE {self.supi} service request accepted (via DownlinkNASTransport)")
@@ -300,9 +310,11 @@ class IntegratedUE:
                     logger.info(f"UE {self.supi} received PDU Session Release Command (via DownlinkNASTransport) for session {pdu_sess_id}")
                     if pdu_sess_id == self.dnn_internet_pdu_sess_id:
                         self.dnn_internet_connected = False
+                        self.pdu_release_event.set()
                         logger.info(f"[PDU Release] Set dnn_internet_connected = False")
                     elif pdu_sess_id == self.dnn2_ims_pdu_sess_id:
                         self.dnn2_ims_connected = False
+                        self.pdu_release_event.set()
                     self.ue_state = self.ue_state & ~0x8
 
                     # Send PDU Session Release Complete via UplinkNASTransport
@@ -321,28 +333,35 @@ class IntegratedUE:
                     from coresimrunner.integration.integrated_messages import InitialContextSetupRequestMessage, InitialContextSetupResponseMessage, RegistrationCompleteMessage
                     self.ue_5g_guti = InitialContextSetupRequestMessage(pdu_dict)
                     self.ue_state = self.ue_state | 0x4
-                    self.registered = True
-                    self.t_registered = time.time()
-                    
-                    # Send Initial Context Setup Response
+                                
+                    # Always send Initial Context Setup Response (NGAP-level acknowledgment)
                     message = InitialContextSetupResponseMessage(
                         self.amf_ue_ngap_id, ran_ue_ngap_id=self.ran_ue_ngap_id
                     )
                     messages.append(message)
-                    
-                    # Send Registration Complete
-                    message = RegistrationCompleteMessage(
-                        self.amf_ue_ngap_id, self.k_nas_int, self.k_nas_enc, 
-                        self.plmn_bcd, tac=self.tac, ciphAlgo=self.ciphAlgo, 
-                        ntegAlgo=self.ntegAlgo, ran_ue_ngap_id=self.ran_ue_ngap_id
-                    )
-                    messages.append(message)
-                    
-                    # Initiate PDU Session Establishment for internet DNN
-                    message = self.send_pdusession_establishment_request(self.dnn, pdu_sess_id=1)
-                    messages.append(message)
-                    
-                    logger.info(f"✓ UE {self.supi} registered successfully")
+                                
+                    if not self.registered:
+                        # First Registration Accept — full flow
+                        self.registered = True
+                        self.t_registered = time.time()
+                                    
+                        # Send Registration Complete
+                        message = RegistrationCompleteMessage(
+                            self.amf_ue_ngap_id, self.k_nas_int, self.k_nas_enc, 
+                            self.plmn_bcd, tac=self.tac, ciphAlgo=self.ciphAlgo, 
+                            ntegAlgo=self.ntegAlgo, ran_ue_ngap_id=self.ran_ue_ngap_id
+                        )
+                        messages.append(message)
+                                    
+                        # Initiate PDU Session Establishment for internet DNN
+                        message = self.send_pdusession_establishment_request(self.dnn, pdu_sess_id=1)
+                        messages.append(message)
+                                    
+                        logger.info(f"\u2713 UE {self.supi} registered successfully")
+                    else:
+                        # Duplicate/retransmitted Registration Accept (e.g. AMF T3550 retransmit)
+                        # Only send InitialContextSetupResponse, skip Registration Complete + PDU
+                        logger.info(f"UE {self.supi} ignoring retransmitted Registration Accept (already registered)")
                     
                 elif message_type == MessageType.SERVICE_ACCEPT:
                     # Handle Service Accept (arrives via InitialContextSetupRequest after Service Request)
@@ -363,6 +382,7 @@ class IntegratedUE:
                     )
                     messages.append(message)
                     self.dnn_internet_connected = True
+                    self.pdu_establish_event.set()
                     logger.info(f"✓ UE {self.supi} service request accepted")
                     
                 else:
@@ -415,8 +435,10 @@ class IntegratedUE:
                     # Mark session as released
                     if pdu_sess_id == self.dnn_internet_pdu_sess_id:
                         self.dnn_internet_connected = False
+                        self.pdu_release_event.set()
                     elif pdu_sess_id == self.dnn2_ims_pdu_sess_id:
                         self.dnn2_ims_connected = False
+                        self.pdu_release_event.set()
                     self.ue_state = self.ue_state & ~0x8  # Clear PDU established bit
 
                     # Send PDUSessionResourceReleaseResponse (proc 28)
@@ -464,7 +486,10 @@ class IntegratedUE:
                 self.dnn_internet_connected = False
                 self.dnn2_ims_connected = False
                 self.ue_state = 0x0
-                logger.info(f"\u2713 UE {self.supi} context released")
+                self.deregister_event.set()
+                self.context_release_event.set()
+                self.pdu_release_event.set()
+                logger.info(f"✓ UE {self.supi} context released")
                 
         return self, messages
 
@@ -538,6 +563,7 @@ class IntegratedUE:
             self.dnn_ipv6 = None
             self.dnn_gtp_teid = teid_hex
             self.dnn_internet_connected = True
+            self.pdu_establish_event.set()
             self.dnn_internet_qos = qosFlowIdentifier
             self.dnn_internet_pdu_sess_id = PDUSessID
             self.t_dnn1_done = time.time()

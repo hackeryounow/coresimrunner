@@ -72,7 +72,7 @@ def run_5g_test(args, config_loader):
         start_imsi = args.start_imsi or f"{network_config.get('initial_imsi_index', 1):010d}"
         gnb_address = args.gnb_address or config_loader.get("GNB_ADDRESS", "192.168.55.9")
         amf_address = args.core_address or config_loader.get_core_address()
-        dnn = args.dnn or config_loader.get("DNN", "internet")
+        dnn = args.dnn or config_loader.get("DNN") or config_loader.get("DATA_NETWORK_NAME", "internet")
         tac = args.tac or config_loader.get("TAC", "000001")
         gnb_nr_cell_id = config_loader.get_int("GNB_NR_CELL_ID", 1)
         log_level = args.log_level or config_loader.get("LOG_LEVEL", "INFO")
@@ -141,7 +141,7 @@ def run_4g_test(args, config_loader):
         enb_id = args.enb_id if args.enb_id is not None else config_loader.get_int("ENB_ID", 1)
         enb_cell_id = args.enb_cell_id if args.enb_cell_id is not None else config_loader.get_int("ENB_CELL_ID", 1000000)
         tac = args.tac or config_loader.get("TAC", "000001")
-        apn = args.apn or config_loader.get("APN", "internet")
+        apn = args.apn or config_loader.get("APN") or config_loader.get("DATA_NETWORK_NAME", "internet")
         imeisv = config_loader.get("IMEISV", "4370816125816151")
         log_level = args.log_level or config_loader.get("LOG_LEVEL", "INFO")
         count = args.count if args.count is not None else config_loader.get_int("DEFAULT_SUBSCRIPTION_COUNT", 2)
