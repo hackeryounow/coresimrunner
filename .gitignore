@@ -20,7 +20,6 @@ env/
 *.swo
 
 # Data
-data/
 *.log
 *.pcap
 *.pcapng

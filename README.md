@@ -12,6 +12,7 @@ CoreSimRunner is a production-ready testing framework for automated subscriber p
 * [Quick Start](#-quick-start)
 * [Usage Modes](#-usage-modes)
 * [Configuration](#-configuration)
+* [IMS Provisioning (pyHSS)](#-ims-provisioning-pyhss)
 * [Output & Reporting](#-output--reporting)
 * [Performance & Scaling](#-performance--scaling)
 * [Troubleshooting](#-troubleshooting)
@@ -23,6 +24,7 @@ CoreSimRunner is a production-ready testing framework for automated subscriber p
 ### Core Functionality
 
 * **Concurrent Subscription Management**: ThreadPoolExecutor-based provisioning with tqdm progress bar (up to 20 concurrent workers)
+* **IMS Provisioning via pyHSS**: Automatic 4-step IMS subscriber provisioning (APN → AuC → Subscriber → IMS Subscriber) when `ENABLE_IMS=true` (Open5GS only)
 * **Multi-UE Concurrent Testing**: Simultaneously register and establish sessions for multiple UEs (1–100+)
 * **Real-time Monitoring**: Live progress tracking with configurable logging levels (`LOG_LEVEL` in `.env`)
 * **Compact Failure Reporting**: Range-formatted failure output (e.g., `Failed: 3/100, indices: 1-3, 5, 7-9`)
@@ -226,7 +228,8 @@ CLI arguments > `.env` file > built-in defaults. Any parameter can be set in `.e
 | `DNN` | Data Network Name | `internet` |
 | `SLICES` | Slice configuration JSON (SST + optional SD) | `{"SST": 1}` |
 | `GNB_NR_CELL_ID` | NR Cell ID | `1` |
-| `ENABLE_IMS` | Enable second PDU session (IMS DNN) | `false` |
+| `ENABLE_IMS` | Enable IMS: second PDU session + pyHSS provisioning | `false` |
+| `PYHSS_PORT` | pyHSS REST API port (for IMS provisioning) | `8080` |
 
 **4G Parameters:**
 
@@ -259,6 +262,85 @@ Override `.env` settings with command-line arguments:
 | `--tac` | Tracking Area Code | `000001` |
 | `--log-level` | Logging verbosity | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
 | `--delete` | Delete mode (provision only) | *(flag)* |
+
+## 📞 IMS Provisioning (pyHSS)
+
+When `ENABLE_IMS=true` and using **Open5GS**, each subscriber is automatically provisioned to the **pyHSS** REST API in addition to the Open5GS WebUI. This enables full IMS registration (VoNR/VoLTE) end-to-end.
+
+### How It Works
+
+For each subscriber, the following 4-step sequence is executed against pyHSS:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  Step 1: Ensure APNs exist (idempotent)                    │
+│    GET  /apn/list?page=0&page_size=200                     │
+│    PUT  /apn/  {"apn": "internet", ...}  (if missing)     │
+│    PUT  /apn/  {"apn": "ims", ...}      (if missing)     │
+│    → Returns (internet_apn_id, ims_apn_id)                  │
+│                                                             │
+│  Step 2: Create AuC entry                                   │
+│    PUT  /auc/  {"ki": ..., "opc": ..., "amf": ...,      │
+│                 "sqn": 0, "imsi": ...}                     │
+│    → Returns auc_id                                         │
+│                                                             │
+│  Step 3: Create Subscriber                                  │
+│    PUT  /subscriber/  {"imsi": ..., "auc_id": ...,        │
+│          "default_apn": internet_id,                       │
+│          "apn_list": "internet_id,ims_id",                │
+│          "msisdn": ..., ...}                               │
+│                                                             │
+│  Step 4: Create IMS Subscriber                              │
+│    PUT  /ims_subscriber/  {"imsi": ..., "msisdn": ...,   │
+│          "scscf": "sip:scscf.ims.mnc{MNC}.mcc{MCC}...",   │
+│          "scscf_realm": "ims.mnc{MNC}.mcc{MCC}..."}       │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Key Behaviors
+
+* **Idempotent APN creation**: Queries existing APNs first; only creates missing ones. Existing `apn_id`s are reused.
+* **PLMN-derived S-CSCF**: The `scscf`, `scscf_peer`, and `scscf_realm` fields are automatically derived from the configured `PLMN` (MCC + MNC).
+* **MSISDN derivation**: Uses the prefix from the subscription template (first 3 digits) + zero-padded IMSI index. E.g., template `"13300000001"` → prefix `133` + index `00000042` → MSISDN `13300000042`.
+* **Delete cleanup**: `--delete` removes the subscriber from pyHSS as well (ims_subscriber, subscriber, auc).
+
+### Configuration
+
+```ini
+# .env — required for IMS provisioning
+ENABLE_IMS=true
+PYHSS_PORT=8080
+PERMANENT_KEY=12341234123412341234123412340000
+OPC_VALUE=71a121bb69baf3c0cc53fb5038a0131f
+AMF=8000
+```
+
+| Parameter | Source | pyHSS Field |
+|-----------|--------|-------------|
+| `PERMANENT_KEY` | `.env` | `ki` in AuC |
+| `OPC_VALUE` | `.env` | `opc` in AuC |
+| `AMF` | `.env` | `amf` in AuC (default `8000`) |
+| `PLMN` | `.env` | MCC/MNC in S-CSCF URI |
+| `CORE_ADDRESS` | `.env` | pyHSS API host |
+| `PYHSS_PORT` | `.env` | pyHSS API port (default `8080`) |
+
+### Usage Examples
+
+```bash
+# Provision 5 subscribers (Open5GS + pyHSS)
+python3 coresim_runner.py --mode provision --count 5 --core-network open5gs
+
+# Delete 5 subscribers (Open5GS + pyHSS cleanup)
+python3 coresim_runner.py --mode provision --count 5 --delete --core-network open5gs
+```
+
+### Unit Tests
+
+39 unit tests with mocked HTTP (no live pyHSS needed):
+
+```bash
+python3 -m pytest tests/test_pyhss_client.py -v
+```
 
 ## 📊 Output & Reporting
 
@@ -378,7 +460,8 @@ CoreSimRunner/
 │   │   ├── core_network.py          # Base interface + _format_failed_range()
 │   │   ├── core_network_factory.py  # Factory pattern
 │   │   ├── free5gc_impl.py          # Free5GC: concurrent provisioning, tqdm
-│   │   └── open5gs_impl.py          # Open5GS: concurrent provisioning, tqdm
+│   │   ├── open5gs_impl.py          # Open5GS: concurrent provisioning + pyHSS IMS
+│   │   └── pyhss_client.py          # PyHSS REST API client (APN/AuC/Subscriber/IMS)
 │   ├── integration/                 # Protocol integration
 │   │   ├── integrated_gnb.py        # 5G gNodeB simulator (SCTP, NGAP)
 │   │   ├── integrated_ue.py         # 5G UE state machine + latency tracking
@@ -387,7 +470,11 @@ CoreSimRunner/
 │   │   ├── integrated_4g_ue.py      # 4G UE state machine
 │   │   ├── integrated_4g_messages.py # 4G S1AP/NAS message handling
 │   │   └── eNAS.py                  # 4G NAS codec (encode/decode)
-│   ├── tests/                       # Unit tests (Milenage, NAS MAC, imports)
+│   ├── tests/                       # Unit tests (Milenage, NAS MAC, imports, pyHSS)
+│   │   ├── test_pyhss_client.py     # PyHSS client: 39 tests, mocked HTTP
+│   │   ├── test_milenage.py         # Milenage authentication
+│   │   ├── test_compute_smc_mac.py  # NAS MAC computation
+│   │   └── test_imports.py          # Import verification
 │   ├── config_loader.py             # .env + JSON config management
 │   ├── coresim_runner.py            # Main CLI entry point
 │   └── ue_test_runner.py            # Multi-UE orchestrator + latency stats

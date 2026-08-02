@@ -56,6 +56,7 @@ class MessageType(Enum):
     SECURITY_MODE_COMMAND = 0x5d
     REGISTRATION_ACCEPT = 0x42
     REGISTRATION_COMPLETE = 0x43
+    REGISTRATION_REJECT = 0x44
     CONFIGURATION_UPDATE_COMMNAD = 0x54
     DEREGISTRATION_REQUEST = 0x45
     DEREGISTRATION_ACCEPT = 0x46
@@ -223,23 +224,68 @@ def fgmm_security_protected_nas_message(CiphAlgo, IntegAlgo, k_nas_enc, k_nas_in
 
 def fgmm_registration_request_message(msin="0112345038", plmn="46099", nssai=[{'SST': 1}]):
     """
-    Create registration request message with proper NSSAI handling.
+    Create a minimal 5GS Registration Request NAS PDU (cleartext, initial registration).
+
+    Includes only mandatory IEs + UE Security Capability.
+    pycrate transparent IEs (5GMM Capability, NSSAI, 5GS Update Type, etc.) are
+    automatically excluded because they are not present in the RegIEs dict.
+    Used for the INITIAL Registration Request sent in the Initial UE Message.
     """
     try:
         from pycrate_mobile.TS24501_FGMM import FGMMRegistrationRequest
     except ImportError:
         from pycrate_mobile.TS24501_IE import FGMMRegistrationRequest
-    
+
     RegIEs = {}
     RegIEs['5GMMHeader'] = {'EPD': 126, 'spare': 0, 'SecHdr': 0, 'Type': 65}
     RegIEs['NAS_KSI'] = {'TSC': 0, 'Value': 7}
-    RegIEs['5GSRegType'] = {'FOR': 1, 'Value': 1}
+    RegIEs['5GSRegType'] = {'FOR': 0, 'Value': 1}
+    RegIEs['5GSID'] = {
+        'spare': 0, 'Fmt': 0, 'spare': 0, 'Type': 1,
+        'Value': {
+            'PLMN': plmn,
+            'RoutingInd': b'\x00\x00',
+            'spare': 0, 'ProtSchemeID': 0, 'HNPKID': 0,
+            'Output': bcd(msin)
+        }
+    }
+    RegIEs['UESecCap'] = {
+        '5G-EA0': 1, '5G-EA1_128': 1, '5G-EA2_128': 1, '5G-EA3_128': 1,
+        '5G-EA4': 0, '5G-EA5': 0, '5G-EA6': 0, '5G-EA7': 0,
+        '5G-IA0': 1, '5G-IA1_128': 1, '5G-IA2_128': 1, '5G-IA3_128': 1,
+        '5G-IA4': 0, '5G-IA5': 0, '5G-IA6': 0, '5G-IA7': 0,
+        'EEA0': 1, 'EEA1_128': 1, 'EEA2_128': 1, 'EEA3_128': 1,
+        'EEA4': 0, 'EEA5': 0, 'EEA6': 0, 'EEA7': 0,
+        'EIA0': 1, 'EIA1_128': 1, 'EIA2_128': 1, 'EIA3_128': 1,
+        'EIA4': 0, 'EIA5': 0, 'EIA6': 0, 'EIA7': 0,
+    }
+
+    RegMsg = FGMMRegistrationRequest(val=RegIEs)
+    return RegMsg.to_bytes()
+
+
+def fgmm_registration_request_full_message(msin="0112345038", plmn="46099", nssai=[{'SST': 1}]):
+    """
+    Create a full 5GS Registration Request NAS PDU with all IEs (pycrate-based).
+
+    Used for the Registration Request embedded in the Security Mode Complete NAS Container,
+    sent AFTER security context is established. Includes NSSAI, 5GMM Capability, etc.
+    """
+    try:
+        from pycrate_mobile.TS24501_FGMM import FGMMRegistrationRequest
+    except ImportError:
+        from pycrate_mobile.TS24501_IE import FGMMRegistrationRequest
+
+    RegIEs = {}
+    RegIEs['5GMMHeader'] = {'EPD': 126, 'spare': 0, 'SecHdr': 0, 'Type': 65}
+    RegIEs['NAS_KSI'] = {'TSC': 0, 'Value': 7}
+    RegIEs['5GSRegType'] = {'FOR': 0, 'Value': 1}
     RegIEs['5GSID'] = {'spare': 0, 'Fmt': 0, 'spare': 0, 'Type': 1, 'Value': {'PLMN': plmn, 'RoutingInd': b'\x00\x00', 'spare': 0, 'ProtSchemeID': 0, 'HNPKID': 0, 'Output': bcd(msin)}}
     RegIEs['UESecCap'] = {'5G-EA0': 1, '5G-EA1_128': 1, '5G-EA2_128': 1, '5G-EA3_128': 1, '5G-EA4': 0, '5G-EA5': 0, '5G-EA6': 0, '5G-EA7': 0, '5G-IA0': 1, '5G-IA1_128': 1, '5G-IA2_128': 1, '5G-IA3_128': 1, '5G-IA4': 0, '5G-IA5': 0, '5G-IA6': 0, '5G-IA7': 0, 'EEA0': 1, 'EEA1_128': 1, 'EEA2_128': 1, 'EEA3_128': 1, 'EEA4': 0, 'EEA5': 0, 'EEA6': 0, 'EEA7': 0, 'EIA0': 1, 'EIA1_128': 1, 'EIA2_128': 1, 'EIA3_128': 1, 'EIA4': 0, 'EIA5': 0, 'EIA6': 0, 'EIA7': 0}
     RegIEs['5GSUpdateType'] = {'EPS-PNB-CIoT': 0, '5GS-PNB-CIoT': 0, 'NG-RAN-RCU': 0, 'SMSRequested': 0}
     RegIEs['5GMMCap'] = {'SGC': 0, '5G-HC-CP-CIoT': 0, 'N3Data': 0, '5G-CP-CIoT': 0, 'RestrictEC': 0, 'LPP': 0, 'HOAttach': 0, 'S1Mode': 0}
     RegIEs['NSSAI'] = [{'SNSSAI': s} for s in nssai]
-    
+
     RegMsg = FGMMRegistrationRequest(val=RegIEs)
     RegMsg['5GMMCap']['5GMMCap'].disable_from(8)
     return RegMsg.to_bytes()
@@ -436,8 +482,8 @@ def SecurityModeCompleteMessage(amf_ue_ngap_id, kseaf, plmn_bcd: bytes, slices, 
     k_nas_int = conv_501_A8(k_amf, alg_type=2, alg_id=ntegAlgo)
     k_nas_int = k_nas_int[16:]
     
-    # Use the helper functions for cleaner implementation
-    regReqMsg = fgmm_registration_request_message(
+    # Use the full Registration Request for SMC NAS Container (includes NSSAI, 5GMMCap, etc.)
+    regReqMsg = fgmm_registration_request_full_message(
         msin=SUPI.decode()[-10:], 
         plmn=plmn_bcd_decode(plmn_bcd), 
         nssai=[slices]
@@ -537,7 +583,7 @@ def PDUSessionResourceSetupRequestMessage(pdu_dict):
             PDUSessionResourceSetupListSUReq = IE['value'][1]
             break
     if PDUSessionResourceSetupListSUReq is None:
-        return None, None, None, None, None, None
+        return None, None, None, None, None, None, None
         
     PDUSessID = PDUSessionResourceSetupListSUReq[0]['pDUSessionID']
     pDUSessionNAS_PDU = PDUSessionResourceSetupListSUReq[0]['pDUSessionNAS-PDU'][7:]
@@ -568,11 +614,63 @@ def PDUSessionResourceSetupRequestMessage(pdu_dict):
     ipv4_str = f'{oct1}.{oct2}.{oct3}.{oct4}'
     
     PDUSessionResourceSetupRequestTransfer = PDUSessionResourceSetupListSUReq[0]['pDUSessionResourceSetupRequestTransfer'][1]['protocolIEs']
+    
+    # Debug: dump ALL transfer IEs
+    from loguru import logger as _dbg
+    _dbg.info(f"=== PDU Session Resource Setup Transfer IEs ===")
+    for _ie in PDUSessionResourceSetupRequestTransfer:
+        _dbg.info(f"  IE id={_ie['id']}, value[0]={_ie['value'][0] if isinstance(_ie['value'], (list,tuple)) else type(_ie['value'])}")
+    
     ie_139 = next(ie for ie in PDUSessionResourceSetupRequestTransfer if ie['id'] == 139)
+    _transfer = ie_139['value'][1][1]
+    _dbg.info(f"ie_139 type: {type(_transfer)}")
+    _dbg.info(f"ie_139 keys: {list(_transfer.keys()) if hasattr(_transfer, 'keys') else 'N/A'}")
+    
+    # Dump full ie_139 value structure
+    _dbg.info(f"ie_139['value'] type: {type(ie_139['value'])}, len: {len(ie_139['value'])}")
+    for _i, _v in enumerate(ie_139['value']):
+        _dbg.info(f"  ie_139['value'][{_i}]: type={type(_v)}, val={repr(_v)[:200]}")
+    
+    # Access GTP-TEID
     gTP_TEID = ie_139['value'][1][1]['gTP-TEID']
+    _dbg.info(f"gTP_TEID raw: {repr(gTP_TEID)} (type={type(gTP_TEID)})")
+    if hasattr(gTP_TEID, 'get_val'):
+        _teid_val = gTP_TEID.get_val()
+        _dbg.info(f"gTP_TEID.get_val(): {repr(_teid_val)} (type={type(_teid_val)})")
+    
+    # Extract UPF transport layer address (N3 tunnel endpoint IP)
+    upf_addr_raw = ie_139['value'][1][1].get('transportLayerAddress')
+    _dbg.info(f"transportLayerAddress raw: {repr(upf_addr_raw)} (type={type(upf_addr_raw).__name__})")
+    upf_ip_str = None
+    if upf_addr_raw is not None:
+        # pycrate may return: bytes, str (bit-string), or tuple (int_value, bit_length)
+        if hasattr(upf_addr_raw, 'get_val'):
+            raw = upf_addr_raw.get_val()
+        else:
+            raw = upf_addr_raw
+        
+        if isinstance(raw, tuple) and len(raw) == 2:
+            # pycrate BIT STRING format: (integer_value, bit_length)
+            int_val, bit_len = raw
+            if bit_len <= 32:
+                upf_ip_str = str(ipaddress.IPv4Address(int_val))
+            elif bit_len <= 128:
+                upf_ip_str = str(ipaddress.IPv6Address(int_val))
+            _dbg.info(f"transportLayerAddress tuple decoded: int={int_val}, bits={bit_len}, IP={upf_ip_str}")
+        elif isinstance(raw, (bytes, bytearray)):
+            if len(raw) == 4:
+                upf_ip_str = str(ipaddress.IPv4Address(raw))
+            elif len(raw) == 16:
+                upf_ip_str = str(ipaddress.IPv6Address(raw))
+        elif isinstance(raw, str):
+            if len(raw) == 32:
+                upf_ip_str = str(ipaddress.IPv4Address(int(raw, 2)))
+            elif len(raw) == 128:
+                upf_ip_str = str(ipaddress.IPv6Address(int(raw, 2)))
+    _dbg.info(f"UPF IP extraction result: upf_ip={upf_ip_str}, gTP_TEID_hex={gTP_TEID.hex() if hasattr(gTP_TEID, 'hex') else repr(gTP_TEID)}")
     ie_136 = next(ie for ie in PDUSessionResourceSetupRequestTransfer if ie['id'] == 136)
     qosFlowIdentifier = ie_136['value'][1][0]['qosFlowIdentifier']
-    return ipv4_str, gTP_TEID, qosFlowIdentifier, snssai_dict, DNN, PDUSessID
+    return ipv4_str, gTP_TEID, qosFlowIdentifier, snssai_dict, DNN, PDUSessID, upf_ip_str
 
 def PDUSessResourceSetupResponseMessage(amf_ue_ngap_id, qosFlowIdentifier, plmn_bcd, gnb_ip="192.168.55.9", gnb_teid=2, ran_ue_ngap_id=1, tac="000001", pdu_sess_id=1):
     ip_obj = ipaddress.ip_address(gnb_ip)

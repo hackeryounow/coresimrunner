@@ -3,6 +3,10 @@ Open5GS implementation for 5G Core Network subscription provisioning.
 
 This module implements the CoreNetwork interface for Open5GS,
 using configuration from .env and JSON files.
+
+When ENABLE_IMS=true, each subscriber is also provisioned to the
+PyHSS API (APN, AuC, Subscriber, IMS Subscriber) so that IMS
+registration works end-to-end.
 """
 
 import json
@@ -13,6 +17,7 @@ import requests
 from tqdm import tqdm
 from loguru import logger
 from coresimrunner.core_network.core_network import CoreNetwork
+from coresimrunner.core_network.pyhss_client import PyHSSClient
 
 
 class Open5GS(CoreNetwork):
@@ -33,6 +38,23 @@ class Open5GS(CoreNetwork):
         self.plmn_id = self.network_config["plmn_id"]
         self.username = self.network_config["username"]
         self.password = self.network_config["password"]
+
+        # IMS provisioning via PyHSS
+        self.enable_ims = config_loader.get("ENABLE_IMS", "false").lower() == "true"
+        if self.enable_ims:
+            pyhss_port = config_loader.get("PYHSS_PORT", "8080")
+            pyhss_base = f"http://{self.network_config['ip']}:{pyhss_port}"
+            self.pyhss = PyHSSClient(
+                base_url=pyhss_base,
+                mcc=self.network_config["mcc"],
+                mnc=self.network_config["mnc"],
+            )
+            self.ki = config_loader.get("PERMANENT_KEY", "")
+            self.opc = config_loader.get("OPC_VALUE", "")
+            self.amf = config_loader.get("AMF", "8000")
+            logger.info(f"IMS provisioning enabled (PyHSS: {pyhss_base})")
+        else:
+            self.pyhss = None
     
     def _authenticate(self) -> requests.Session:
         """Authenticate with Open5GS and return authenticated session.
@@ -91,6 +113,25 @@ class Open5GS(CoreNetwork):
             logger.error(f"Missing expected data in Open5GS response: {e}")
             return None
     
+    def _derive_msisdn(self, imsi_index: int) -> str:
+        """Derive MSISDN from IMSI index.
+
+        Uses the msisdn pattern from the subscription template
+        (e.g., '13300000001' for index 1).
+
+        Args:
+            imsi_index: Numeric IMSI index
+
+        Returns:
+            MSISDN string
+        """
+        template_msisdn = self.subscription_template.get("msisdn", ["13300000001"])
+        if template_msisdn and len(template_msisdn) > 0:
+            # Use prefix from template (first 3 digits) + zero-padded index
+            prefix = template_msisdn[0][:3]
+            return f"{prefix}{imsi_index:08d}"
+        return f"133{imsi_index:08d}"
+
     def _provision_one(self, session: requests.Session, imsi_index: int) -> Tuple[int, bool]:
         """Provision a single subscription (thread-safe via session). Returns (index, success)."""
         imsi = f"{self.plmn_id}{imsi_index:010d}"
@@ -99,6 +140,20 @@ class Open5GS(CoreNetwork):
         try:
             resp = session.post(self.subscriber_url, data=json.dumps(subscription_data), timeout=30)
             if resp.status_code == 201:
+                # Also provision to PyHSS for IMS
+                if self.enable_ims and self.pyhss:
+                    msisdn = self._derive_msisdn(imsi_index)
+                    ims_ok = self.pyhss.provision_ims_subscriber(
+                        imsi=imsi,
+                        msisdn=msisdn,
+                        ki=self.ki,
+                        opc=self.opc,
+                        amf=self.amf,
+                    )
+                    if not ims_ok:
+                        logger.warning(
+                            f"Open5GS OK but PyHSS IMS provisioning failed for {imsi}"
+                        )
                 return imsi_index, True
         except Exception:
             pass
@@ -111,6 +166,9 @@ class Open5GS(CoreNetwork):
         try:
             resp = session.delete(delete_url, timeout=30)
             if resp.status_code in (200, 204):
+                # Also delete from PyHSS
+                if self.enable_ims and self.pyhss:
+                    self.pyhss.delete_subscriber(imsi)
                 return imsi_index, True
         except Exception:
             pass

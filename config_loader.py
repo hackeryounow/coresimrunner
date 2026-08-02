@@ -142,10 +142,10 @@ class ConfigLoader:
         if not file_path:
             raise ValueError(f"No file path found for key: {key}")
         
-        # Resolve relative paths against profiles_dir/../.. (backend/)
+        # Resolve relative paths against the .env file's directory
         if not os.path.isabs(file_path):
-            backend_dir = os.path.normpath(os.path.join(self.profiles_dir, "..", ".."))
-            file_path = os.path.normpath(os.path.join(backend_dir, file_path))
+            env_dir = os.path.dirname(os.path.abspath(self.env_file))
+            file_path = os.path.normpath(os.path.join(env_dir, file_path))
         
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"JSON configuration file {file_path} not found")

@@ -12,6 +12,14 @@ import argparse
 import sys
 import os
 import time
+
+# Ensure the parent directory is on sys.path so that
+# `from coresimrunner.xxx import ...` works when running
+# this script directly from inside the package directory.
+_PKG_PARENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if _PKG_PARENT not in sys.path:
+    sys.path.insert(0, _PKG_PARENT)
+
 from loguru import logger
 
 from coresimrunner.config_loader import ConfigLoader
@@ -19,6 +27,8 @@ from coresimrunner.core_network.core_network_factory import create_core_network
 from coresimrunner.ue_test_runner import UETestRunner
 from coresimrunner.integration.integrated_4g_gnb import Integrated4GGNB
 from coresimrunner.integration.integrated_4g_ue import _format_sgw_addr, _format_teid
+from coresimrunner.sequential_reg_runner import SequentialRegRunner
+from coresimrunner.vonr_session import VoNRSessionRunner
 
 
 def provision_subscriptions(count: int, core_network_type: str, delete: bool = False):
@@ -114,6 +124,175 @@ def run_5g_test(args, config_loader):
         
     except Exception as e:
         print(f"Error running 5G test: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def run_seq_reg(args, config_loader):
+    """
+    Run sequential 2-round registration with GTP-U encapsulation.
+
+    Round 1: Register each UE one-by-one, capture IP + TEID.
+    Round 2: Deregister, send GTP-U encapsulated NAS, re-register.
+    """
+    try:
+        network_config = config_loader.get_network_config(args.core_network)
+
+        plmn = args.plmn or config_loader.get_plmn()
+        mcc = plmn[:3]
+        mnc = plmn[3:]
+        ki = args.ki or config_loader.get("PERMANENT_KEY", "12341234123412341234123412340000")
+        opc = args.opc or config_loader.get("OPC_VALUE", "71a121bb69baf3c0cc53fb5038a0131f")
+        gnb_address = args.gnb_address or config_loader.get("GNB_ADDRESS", "192.168.55.9")
+        amf_address = args.core_address or config_loader.get_core_address()
+        dnn = args.dnn or config_loader.get("DNN", "internet")
+        tac = args.tac or config_loader.get("TAC", "000001")
+        gnb_nr_cell_id = config_loader.get_int("GNB_NR_CELL_ID", 1)
+        log_level = args.log_level or config_loader.get("LOG_LEVEL", "INFO")
+
+        # Build IMSI list: from --imsi args or from start_imsi + count
+        if hasattr(args, 'imsi') and args.imsi:
+            imsi_list = args.imsi
+        else:
+            start_imsi = args.start_imsi or f"{network_config.get('initial_imsi_index', 1):010d}"
+            count = args.count if args.count is not None else 2
+            start_val = int(start_imsi)
+            imsi_list = [f"{start_val + i:010d}" for i in range(count)]
+
+        # Slice config
+        slices_config = config_loader.get("SLICES", '{"SST": 1}')
+        try:
+            import json
+            slices = json.loads(slices_config.replace("'", '"'))
+        except Exception:
+            slices = {"SST": 1}
+        if "SD" in slices and isinstance(slices["SD"], str):
+            slices["SD"] = int(slices["SD"], 16)
+
+        gtpu_port = args.gtpu_port if hasattr(args, 'gtpu_port') and args.gtpu_port else 2152
+
+        print(f"\n{'='*60}")
+        print(f"Sequential Registration with GTP-U Encapsulation")
+        print(f"{'='*60}")
+        print(f"Core Network:  {args.core_network}")
+        print(f"UE Count:      {len(imsi_list)}")
+        print(f"IMSI List:     {imsi_list}")
+        print(f"gNodeB Addr:   {gnb_address}")
+        print(f"AMF Addr:      {amf_address}")
+        print(f"GTP-U Port:   {gtpu_port}")
+        print(f"PLMN:          {plmn}")
+        print(f"DNN:           {dnn}")
+        print(f"TAC:           {tac}")
+        print(f"{'='*60}\n")
+
+        runner = SequentialRegRunner(
+            mcc=mcc,
+            mnc=mnc,
+            gnb_address=gnb_address,
+            amf_address=amf_address,
+            imsi_list=imsi_list,
+            ki=ki,
+            opc=opc,
+            dnn=dnn,
+            tac=tac,
+            gnb_nr_cell_id=gnb_nr_cell_id,
+            slices=slices,
+            log_level=log_level,
+            gtpu_target_port=gtpu_port,
+        )
+
+        success = runner.run()
+        return success
+
+    except Exception as e:
+        print(f"Error running sequential registration: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def run_vonr(args, config_loader):
+    """
+    Run VoNR IMS session establishment: 5G registration + IMS PDU + SIP REGISTER + VoNR call.
+
+    Sends SIP messages through the UPF GTP-U tunnel to the P-CSCF,
+    performing IMS registration and optionally a VoNR INVITE call.
+    """
+    try:
+        plmn = args.plmn or config_loader.get_plmn()
+        mcc = plmn[:3]
+        mnc = plmn[3:]
+        ki = args.ki or config_loader.get("PERMANENT_KEY", "12341234123412341234123412340000")
+        opc = args.opc or config_loader.get("OPC_VALUE", "71a121bb69baf3c0cc53fb5038a0131f")
+        gnb_address = args.gnb_address or config_loader.get("GNB_ADDRESS", "192.168.55.9")
+        amf_address = args.core_address or config_loader.get_core_address()
+        tac = args.tac or config_loader.get("TAC", "000001")
+        log_level = args.log_level or config_loader.get("LOG_LEVEL", "INFO")
+
+        # IMSI
+        if hasattr(args, 'imsi') and args.imsi:
+            imsi_suffix = args.imsi
+        else:
+            start_imsi = args.start_imsi or f"{config_loader.get_int('INITIAL_IMSI_INDEX', 1):010d}"
+            imsi_suffix = start_imsi
+
+        # Slice config
+        slices_config = config_loader.get("SLICES", '{"SST": 1}')
+        try:
+            import json
+            slices = json.loads(slices_config.replace("'", '"'))
+        except Exception:
+            slices = {"SST": 1}
+        if "SD" in slices and isinstance(slices["SD"], str):
+            slices["SD"] = int(slices["SD"], 16)
+
+        # VoNR-specific parameters (from CLI or docker_open5gs .env defaults)
+        upf_ip = args.upf_ip or config_loader.get("UPF_IP", "172.22.0.8")
+        pcscf_ip = args.pcscf_ip or config_loader.get("PCSCF_IP", "172.22.0.21")
+        pcscf_port = args.pcscf_port or config_loader.get_int("PCSCF_PORT", 5060)
+        ims_domain = args.ims_domain or None  # auto-derive from PLMN
+        caller_phone = args.caller_phone or "13012345679"
+        callee_phone = args.callee_phone or "13012345678"
+        skip_call = args.skip_call
+
+        print(f"\n{'='*70}")
+        print(f"  VoNR IMS Session Establishment")
+        print(f"{'='*70}")
+        print(f"  PLMN:       {plmn} (MCC={mcc}, MNC={mnc})")
+        print(f"  IMSI:       {mcc}{mnc}{imsi_suffix.zfill(10)}")
+        print(f"  gNB:        {gnb_address}")
+        print(f"  AMF:        {amf_address}")
+        print(f"  UPF:        {upf_ip}")
+        print(f"  P-CSCF:     {pcscf_ip}:{pcscf_port}")
+        print(f"  Caller:     {caller_phone}")
+        print(f"  Callee:     {callee_phone}")
+        print(f"  Skip Call:  {skip_call}")
+        print(f"{'='*70}\n")
+
+        runner = VoNRSessionRunner(
+            mcc=mcc,
+            mnc=mnc,
+            imsi_suffix10=imsi_suffix,
+            ki=ki,
+            opc=opc,
+            gnb_address=gnb_address,
+            amf_address=amf_address,
+            upf_ip=upf_ip,
+            pcscf_ip=pcscf_ip,
+            pcscf_port=pcscf_port,
+            ims_domain=ims_domain,
+            caller_phone=caller_phone,
+            callee_phone=callee_phone,
+            tac=tac,
+            slices=slices,
+            log_level=log_level,
+        )
+
+        return runner.run(skip_call=skip_call)
+
+    except Exception as e:
+        print(f"Error running VoNR session: {e}")
         import traceback
         traceback.print_exc()
         return False
@@ -266,14 +445,23 @@ Examples:
   
   # Run 4G test (override address via CLI)
   %(prog)s --mode 4g-test --count 10 --core-network open5gs --enb-address 192.168.55.9 --core-address 192.168.55.53
+  
+  # Run sequential 2-round registration with GTP-U encapsulation
+  %(prog)s --mode seq-reg --imsi 0000000001 0000000002 --core-network free5gc --gnb-address 192.168.55.9 --core-address 192.168.55.211
+
+  # Run VoNR IMS session (REGISTER + INVITE via GTP-U to P-CSCF)
+  %(prog)s --mode vonr --imsi 0000000001 --gnb-address 192.168.55.9 --core-address 192.168.55.53 --upf-ip 172.22.0.8 --pcscf-ip 172.22.0.21
+
+  # VoNR REGISTER only (no call)
+  %(prog)s --mode vonr --skip-call --imsi 0000000001
         """
     )
     
     # Operation mode
     parser.add_argument(
         "--mode", 
-        help="Operation mode: 'provision' for subscription management, 'ue-test' for 5G testing, '4g-test' for 4G testing",
-        choices=['provision', 'ue-test', '4g-test'],
+        help="Operation mode: 'provision' for subscription management, 'ue-test' for 5G testing, '4g-test' for 4G testing, 'seq-reg' for sequential 2-round registration with GTP-U, 'vonr' for VoNR IMS SIP session",
+        choices=['provision', 'ue-test', '4g-test', 'seq-reg', 'vonr'],
         default="provision"
     )
     
@@ -411,6 +599,65 @@ Examples:
         type=str,
         default=None
     )
+    
+    # Sequential registration arguments
+    parser.add_argument(
+        "--imsi",
+        help="List of IMSI suffixes (10 digits each) for seq-reg mode, e.g. --imsi 0000000001 0000000002",
+        nargs='+',
+        type=str,
+        default=None
+    )
+    parser.add_argument(
+        "--gtpu-port",
+        help="GTP-U target UDP port for encapsulated packets (default: 2152)",
+        type=int,
+        default=None
+    )
+
+    # VoNR-specific arguments
+    parser.add_argument(
+        "--upf-ip",
+        help="UPF GTP-U tunnel endpoint IP for VoNR (default: 172.22.0.8)",
+        type=str,
+        default=None
+    )
+    parser.add_argument(
+        "--pcscf-ip",
+        help="P-CSCF SIP address for VoNR (default: 172.22.0.21)",
+        type=str,
+        default=None
+    )
+    parser.add_argument(
+        "--pcscf-port",
+        help="P-CSCF SIP port for VoNR (default: 5060)",
+        type=int,
+        default=None
+    )
+    parser.add_argument(
+        "--ims-domain",
+        help="IMS home domain (auto-derived from PLMN if omitted)",
+        type=str,
+        default=None
+    )
+    parser.add_argument(
+        "--caller-phone",
+        help="Caller phone number for VoNR INVITE (default: 13012345679)",
+        type=str,
+        default=None
+    )
+    parser.add_argument(
+        "--callee-phone",
+        help="Callee phone number for VoNR INVITE (default: 13012345678)",
+        type=str,
+        default=None
+    )
+    parser.add_argument(
+        "--skip-call",
+        help="Only perform SIP REGISTER, skip VoNR INVITE call setup",
+        action="store_true",
+        default=False
+    )
 
     args = parser.parse_args()
     
@@ -443,11 +690,29 @@ Examples:
 
         elif args.mode == "4g-test":
             success = run_4g_test(args, config_loader)
-            
+                    
             if success:
-                print("\n✓ Multi-UE 4G test completed successfully!")
+                print("\n\u2713 Multi-UE 4G test completed successfully!")
             else:
-                print("\n✗ Multi-UE 4G test failed or partially failed.")
+                print("\n\u2717 Multi-UE 4G test failed or partially failed.")
+                sys.exit(1)
+        
+        elif args.mode == "seq-reg":
+            success = run_seq_reg(args, config_loader)
+                    
+            if success:
+                print("\n\u2713 Sequential registration with GTP-U encapsulation completed!")
+            else:
+                print("\n\u2717 Sequential registration failed or partially failed.")
+                sys.exit(1)
+
+        elif args.mode == "vonr":
+            success = run_vonr(args, config_loader)
+
+            if success:
+                print("\n\u2713 VoNR IMS session establishment completed!")
+            else:
+                print("\n\u2717 VoNR IMS session failed or partially completed.")
                 sys.exit(1)
             
     except FileNotFoundError as e:

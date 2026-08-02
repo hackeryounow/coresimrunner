@@ -137,6 +137,7 @@ class IntegratedUE:
         self.gtp_teid = None
         self.dnn_ipv4 = None
         self.dnn_ipv6 = None
+        self.upf_ip = None  # UPF N3 tunnel endpoint IP
         self.dnn_internet_qos = None
         self.dnn_internet_pdu_sess_id = None
         self.dnn2_ipv4 = None
@@ -144,6 +145,15 @@ class IntegratedUE:
         self.dnn2_ims_qos = None
         self.dnn2_ims_pdu_sess_id = None
         self.ue_5g_guti = None
+        
+        # Round 1 captured session info (for GTP-U encapsulation in round 2)
+        self.round1_ipv4 = None
+        self.round1_teid = None
+        self.round1_upf_ip = None
+
+        # Registration failure tracking
+        self.registration_rejected = False
+        self.registration_reject_cause = None
         
         # Session status flags
         self.registered = False
@@ -244,6 +254,30 @@ class IntegratedUE:
                     self.dnn_internet_connected = False
                     self.dnn2_ims_connected = False
                     logger.info(f"\u2713 UE {self.supi} deregistration accepted by network")
+
+                elif message_type == MessageType.REGISTRATION_REJECT:
+                    # Handle Registration Reject (NAS type 0x44)
+                    # Extract 5GMM cause from NAS-PDU
+                    nas_pdu = None
+                    for ie in pdu_dict['value'][1]['protocolIEs']:
+                        if ie['value'][0] == 'NAS-PDU':
+                            nas_pdu = ie['value'][1]
+                            break
+                    cause_val = None
+                    if nas_pdu and len(nas_pdu) >= 4:
+                        # Try both plain and security-protected NAS formats
+                        if nas_pdu[1] == 0:  # plain (no security)
+                            cause_val = nas_pdu[3] if len(nas_pdu) > 3 else None
+                        else:
+                            # Security-protected: EPD(1)+SecHdr(1)+MAC(8)+SeqNo(1)+EPD(1)+SecHdr(1)+Type(1)+Cause(1)
+                            offset = 14  # skip security wrapper
+                            if len(nas_pdu) > offset:
+                                cause_val = nas_pdu[offset]
+                    self.registration_rejected = True
+                    self.registration_reject_cause = cause_val
+                    nas_hex = nas_pdu.hex() if nas_pdu else 'N/A'
+                    logger.error(f"\u2717 UE {self.supi} REGISTRATION REJECTED by AMF! "
+                                f"5GMM cause={cause_val}, NAS-PDU={nas_hex}")
                     
                 elif message_type == MessageType.SERVICE_ACCEPT:
                     # Handle Service Accept via DownlinkNASTransport (proc 4)
@@ -372,12 +406,12 @@ class IntegratedUE:
                 if message_type == MessageType.DL_NAS_TRANSPORT:
                     # Handle PDU Session Resource Setup Request
                     from coresimrunner.integration.integrated_messages import PDUSessionResourceSetupRequestMessage, PDUSessResourceSetupResponseMessage
-                    ipv4_str, gTP_TEID, qosFlowIdentifier, SNSSAI, DNN, PDUSessID = PDUSessionResourceSetupRequestMessage(pdu_dict)
+                    ipv4_str, gTP_TEID, qosFlowIdentifier, SNSSAI, DNN, PDUSessID, upf_ip_str = PDUSessionResourceSetupRequestMessage(pdu_dict)
                     self.ue_state = self.ue_state | 0x8
                     
                     # Configure DNN session
                     extra_messages = self._configure_dnn_session(
-                        ipv4_str, gTP_TEID, qosFlowIdentifier, SNSSAI, DNN, PDUSessID
+                        ipv4_str, gTP_TEID, qosFlowIdentifier, SNSSAI, DNN, PDUSessID, upf_ip_str
                     )
                     
                     # Send PDU Session Resource Setup Response
@@ -505,7 +539,7 @@ class IntegratedUE:
                     return None
         return None
 
-    def _configure_dnn_session(self, ipv4_str, gTP_TEID, qosFlowIdentifier, SNSSAI, DNN, PDUSessID):
+    def _configure_dnn_session(self, ipv4_str, gTP_TEID, qosFlowIdentifier, SNSSAI, DNN, PDUSessID, upf_ip_str=None):
         """Configure DNN session based on the returned DNN value and store session information.
         
         Returns a list of extra messages to send (e.g., DNN2 PDU session trigger after DNN1).
@@ -517,6 +551,7 @@ class IntegratedUE:
             
         # Convert TEID to hexadecimal string format as requested
         teid_hex = gTP_TEID.hex()
+        logger.info(f"TEID conversion: raw={repr(gTP_TEID)}, type={type(gTP_TEID).__name__}, hex={teid_hex}, int=0x{int(teid_hex, 16):08x}")
         
         # Create session information entry
         session_entry = {
@@ -537,6 +572,7 @@ class IntegratedUE:
             self.dnn_ipv4 = ipv4_str
             self.dnn_ipv6 = None
             self.dnn_gtp_teid = teid_hex
+            self.upf_ip = upf_ip_str
             self.dnn_internet_connected = True
             self.dnn_internet_qos = qosFlowIdentifier
             self.dnn_internet_pdu_sess_id = PDUSessID
@@ -697,6 +733,113 @@ class IntegratedUE:
             pdu_sess_id=pdu_sess_id
         )
         return message
+    
+    def save_round1_session(self):
+        """Save round 1 session info (IP, TEID, UPF IP) for GTP-U encapsulation in round 2."""
+        self.round1_ipv4 = self.dnn_ipv4
+        self.round1_teid = self.dnn_gtp_teid
+        self.round1_upf_ip = self.upf_ip
+        logger.info(f"UE {self.supi} saved round1 session: IPv4={self.round1_ipv4}, TEID={self.round1_teid}, UPF_IP={self.round1_upf_ip}")
+
+    def reset_for_reregistration(self):
+        """Reset UE state for re-registration while preserving round 1 session info."""
+        self.ue_state = 0x0
+        self.kseaf = None
+        self.res = None
+        self.amf_ue_ngap_id = None
+        self.k_nas_int = None
+        self.k_nas_enc = None
+        self.gtp_teid = None
+        self.dnn_ipv4 = None
+        self.dnn_ipv6 = None
+        self.upf_ip = None
+        self.dnn_internet_qos = None
+        self.dnn_internet_pdu_sess_id = None
+        self.dnn2_ipv4 = None
+        self.dnn2_ipv6 = None
+        self.dnn2_ims_qos = None
+        self.dnn2_ims_pdu_sess_id = None
+        self.ue_5g_guti = None
+        self.registered = False
+        self.dnn_internet_connected = False
+        self.dnn2_ims_connected = False
+        self.context_released = False
+        self.service_accepted = False
+        self.paging_received = False
+        self.ue_release_enabled = True
+        self.session_info = {}
+        self.t_start = None
+        self.t_rrc = None
+        self.t_auth_sec = None
+        self.t_registered = None
+        self.t_dnn1_done = None
+        self.t_dnn2_done = None
+        logger.info(f"UE {self.supi} reset for re-registration (round1 info preserved)")
+
+    def build_gtpu_packet(self, payload, teid, msg_type=0xFF):
+        """Build a GTP-U packet with the given payload.
+        
+        Args:
+            payload: The inner payload bytes (e.g., NAS message)
+            teid: Tunnel Endpoint Identifier (hex string or int)
+            msg_type: GTP-U message type (0xFF = G-PDU)
+        
+        Returns:
+            bytes: Complete GTP-U packet
+        """
+        import struct
+        # Convert TEID to int if hex string
+        if isinstance(teid, str):
+            teid_int = int(teid, 16)
+        else:
+            teid_int = teid
+        
+        # GTP-U header (8 bytes):
+        # Version(3b)=1, PT(1b)=1, Reserved(1b)=0, E(1b)=0, S(1b)=0, PN(1b)=0
+        # => first byte = 0x30
+        flags = 0x30
+        length = len(payload)
+        header = struct.pack('!BBHI', flags, msg_type, length, teid_int)
+        return header + payload
+
+    def send_gtpu_encapsulated_registration(self, target_ip, target_port=2152):
+        """Send registration request encapsulated in GTP-U using round 1 IP/TEID.
+        
+        This sends the NAS Registration Request wrapped in a GTP-U header via UDP
+        to simulate user-plane tunneling with the previously assigned credentials.
+        
+        Args:
+            target_ip: UPF/target IP address for GTP-U tunnel
+            target_port: UDP port (default 2152 for GTP-U)
+        
+        Returns:
+            Tuple of (ngap_message, gtpu_packet_bytes, target_ip, target_port)
+        """
+        import socket as sock
+        
+        # Build NAS Registration Request
+        from coresimrunner.integration.integrated_messages import fgmm_registration_request_message, plmn_bcd_decode
+        plmn = plmn_bcd_decode(self.plmn_bcd)
+        msin = self.supi[-10:]
+        nas_pdu = fgmm_registration_request_message(
+            msin=msin, plmn=plmn, nssai=[self.slices]
+        )
+        
+        # Build GTP-U packet with NAS as payload
+        teid = self.round1_teid
+        gtpu_packet = self.build_gtpu_packet(nas_pdu, teid)
+        
+        # Send GTP-U packet via UDP
+        try:
+            udp_sock = sock.socket(sock.AF_INET, sock.SOCK_DGRAM)
+            udp_sock.sendto(gtpu_packet, (target_ip, target_port))
+            udp_sock.close()
+            logger.info(f"UE {self.supi} sent GTP-U encapsulated registration to {target_ip}:{target_port} "
+                       f"(TEID=0x{teid if isinstance(teid, int) else teid}, payload={len(nas_pdu)}B, total={len(gtpu_packet)}B)")
+        except Exception as e:
+            logger.error(f"UE {self.supi} failed to send GTP-U packet: {e}")
+        
+        return gtpu_packet
     
     def __repr__(self):
         return f"IntegratedUE(imsi={self.imsi_suffix10}, ran_ue_ngap_id={self.ran_ue_ngap_id}, amf_ue_ngap_id={self.amf_ue_ngap_id})"
