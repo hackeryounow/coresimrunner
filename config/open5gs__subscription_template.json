@@ -1,12 +1,12 @@
 {
     "title": "466990000000001",
     "security": {
-        "k": "465B5CE8B199B49FAA5F0A2EE238A6BC",
-        "amf": "8000",
+        "k": "${PERMANENT_KEY}",
+        "amf": "${AMF}",
         "op_type": 0,
-        "op_value": "E8ED289DEBA952E4283B54E88E6183CA",
+        "op_value": "${OPC_VALUE}",
         "op": null,
-        "opc": "E8ED289DEBA952E4283B54E88E6183CA"
+        "opc": "${OPC_VALUE}"
     },
     "ambr": {
         "downlink": {

@@ -142,22 +142,30 @@ class Open5GS(CoreNetwork):
             if resp.status_code == 201:
                 # Also provision to PyHSS for IMS
                 if self.enable_ims and self.pyhss:
-                    msisdn = self._derive_msisdn(imsi_index)
-                    ims_ok = self.pyhss.provision_ims_subscriber(
-                        imsi=imsi,
-                        msisdn=msisdn,
-                        ki=self.ki,
-                        opc=self.opc,
-                        amf=self.amf,
-                    )
-                    if not ims_ok:
-                        logger.warning(
-                            f"Open5GS OK but PyHSS IMS provisioning failed for {imsi}"
-                        )
+                    self._provision_pyhss(imsi, imsi_index)
                 return imsi_index, True
-        except Exception:
-            pass
+        except Exception as e:
+            logger.error(f"Open5GS provisioning failed for {imsi}: {e}")
         return imsi_index, False
+
+    def _provision_pyhss(self, imsi: str, imsi_index: int):
+        """Provision IMS data to PyHSS. Errors are logged but never propagated."""
+        try:
+            msisdn = self._derive_msisdn(imsi_index)
+            logger.debug(f"PyHSS provisioning {imsi} (msisdn={msisdn})")
+            ims_ok = self.pyhss.provision_ims_subscriber(
+                imsi=imsi,
+                msisdn=msisdn,
+                ki=self.ki,
+                opc=self.opc,
+                amf=self.amf,
+            )
+            if not ims_ok:
+                logger.warning(
+                    f"Open5GS OK but PyHSS IMS provisioning failed for {imsi}"
+                )
+        except Exception as e:
+            logger.error(f"PyHSS IMS provisioning error for {imsi}: {e}")
 
     def _delete_one(self, session: requests.Session, imsi_index: int) -> Tuple[int, bool]:
         """Delete a single subscription (thread-safe via session). Returns (index, success)."""

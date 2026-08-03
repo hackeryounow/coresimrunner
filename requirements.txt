@@ -1,7 +1,28 @@
+# CoreSimRunner dependencies
+# Python 3.8+
+
+# HTTP client for core network WebUI API and pyHSS REST API
 requests>=2.25.0
+
+# Cryptographic primitives (AES, HMAC, etc.)
 pycryptodome>=3.10.0
+
+# Logging
 loguru>=0.5.0
+
+# Progress bar for concurrent provisioning
 tqdm>=4.60.0
+
+# ASN.1 encoder/decoder for NGAP and NAS protocol messages
 pycrate==0.7.9
+
+# 3GPP Milenage authentication algorithms
 CryptoMobile>=0.3.0
 
+# SCTP socket bindings for NGAP (5G) and S1AP (4G) transport
+# Requires: sudo apt-get install libsctp-dev
+pysctp>=0.7.0
+
+# --- Development / Testing ---
+# Test framework
+pytest>=7.0.0
