@@ -15,6 +15,8 @@ from loguru import logger
 class PyHSSClient:
     """Client for the PyHSS REST API (port 8080)."""
 
+    PAGE_SIZE = 200
+
     def __init__(self, base_url: str, mcc: str, mnc: str):
         """Initialize PyHSS client.
 
@@ -26,37 +28,70 @@ class PyHSSClient:
         self.base_url = base_url.rstrip('/')
         self.mcc = mcc
         self.mnc = mnc
-        self.realm = f"ims.mnc{mnc}.mcc{mcc}.3gppnetwork.org"
+        # 3GPP home network domain: MNC is zero-padded to 3 digits
+        # (e.g., MNC '01' -> 'mnc001', MNC '09' -> 'mnc009')
+        mnc3 = mnc.zfill(3)
+        self.realm = f"ims.mnc{mnc3}.mcc{mcc}.3gppnetwork.org"
         self.scscf_uri = (
-            f"sip:scscf.ims.mnc{mnc}.mcc{mcc}"
+            f"sip:scscf.ims.mnc{mnc3}.mcc{mcc}"
             f".3gppnetwork.org:6060"
         )
         self.scscf_peer = (
-            f"scscf.ims.mnc{mnc}.mcc{mcc}"
+            f"scscf.ims.mnc{mnc3}.mcc{mcc}"
             f".3gppnetwork.org"
         )
+
+    # ------------------------------------------------------------------
+    # Generic paginated list fetcher
+    # ------------------------------------------------------------------
+
+    def _fetch_all_pages(self, resource: str) -> Optional[list]:
+        """Fetch ALL entries from a paginated list endpoint.
+
+        Loops through pages until an empty page is returned.
+
+        Args:
+            resource: API resource name (e.g., 'apn', 'auc', 'ims_subscriber')
+
+        Returns:
+            Combined list of all entries, or None on failure.
+        """
+        all_entries = []
+        page = 0
+        while True:
+            url = f"{self.base_url}/{resource}/list?page={page}&page_size={self.PAGE_SIZE}"
+            try:
+                resp = requests.get(url, timeout=30)
+                if resp.status_code != 200:
+                    logger.error(
+                        f"PyHSS GET /{resource}/list?page={page} failed: "
+                        f"HTTP {resp.status_code}"
+                    )
+                    return None
+                data = resp.json()
+                if not data:
+                    break
+                all_entries.extend(data)
+                # If we got fewer than PAGE_SIZE, this is the last page
+                if len(data) < self.PAGE_SIZE:
+                    break
+                page += 1
+            except requests.exceptions.RequestException as e:
+                logger.error(f"PyHSS GET /{resource}/list?page={page} error: {e}")
+                return None
+        return all_entries
 
     # ------------------------------------------------------------------
     # APN management
     # ------------------------------------------------------------------
 
     def _get_apn_list(self) -> Optional[list]:
-        """Fetch all APN entries from PyHSS.
+        """Fetch all APN entries from PyHSS (paginated).
 
         Returns:
             List of APN dicts, or None on failure.
         """
-        url = f"{self.base_url}/apn/list?page=0&page_size=200"
-        try:
-            resp = requests.get(url, timeout=30)
-            if resp.status_code == 200:
-                return resp.json()
-            logger.error(
-                f"PyHSS GET /apn/list failed: HTTP {resp.status_code}"
-            )
-        except requests.exceptions.RequestException as e:
-            logger.error(f"PyHSS GET /apn/list error: {e}")
-        return None
+        return self._fetch_all_pages("apn")
 
     def _create_apn(self, apn_name: str) -> Optional[int]:
         """Create a single APN entry.
@@ -290,11 +325,13 @@ class PyHSSClient:
         ki: str,
         opc: str,
         amf: str = "8000",
+        internet_apn_id: Optional[int] = None,
+        ims_apn_id: Optional[int] = None,
     ) -> bool:
         """Provision a complete IMS subscriber in PyHSS.
 
         Performs the full four-step provisioning sequence:
-          1. Ensure APNs exist (internet + ims)
+          1. Ensure APNs exist (internet + ims) — skipped if IDs provided
           2. Create AuC entry
           3. Create Subscriber
           4. Create IMS Subscriber
@@ -305,17 +342,22 @@ class PyHSSClient:
             ki: Permanent key (hex string)
             opc: OPc value (hex string)
             amf: AMF value (default '8000')
+            internet_apn_id: Pre-fetched internet APN ID (skips ensure_apns)
+            ims_apn_id: Pre-fetched IMS APN ID (skips ensure_apns)
 
         Returns:
             True if all steps succeeded, False otherwise.
         """
-        # Step 1: Ensure APNs
-        internet_id, ims_id = self.ensure_apns()
-        if internet_id is None or ims_id is None:
-            logger.error(
-                f"PyHSS: failed to ensure APNs for IMSI {imsi}"
-            )
-            return False
+        # Step 1: Ensure APNs (skip if caller already provided IDs)
+        if internet_apn_id is not None and ims_apn_id is not None:
+            internet_id, ims_id = internet_apn_id, ims_apn_id
+        else:
+            internet_id, ims_id = self.ensure_apns()
+            if internet_id is None or ims_id is None:
+                logger.error(
+                    f"PyHSS: failed to ensure APNs for IMSI {imsi}"
+                )
+                return False
 
         # Step 2: Create AuC
         auc_id = self.create_auc(imsi, ki, opc, amf)
@@ -347,8 +389,130 @@ class PyHSSClient:
         )
         return True
 
+    def delete_apns(self) -> bool:
+        """Delete all APN entries from PyHSS.
+
+        Queries /apn/list, then sends DELETE /apn/{apn_id} for each.
+
+        Returns:
+            True if all deletions succeeded, False otherwise.
+        """
+        apn_list = self._get_apn_list()
+        if apn_list is None:
+            logger.error("PyHSS: failed to query APN list for deletion")
+            return False
+
+        if not apn_list:
+            logger.debug("PyHSS: no APNs to delete")
+            return True
+
+        ok = True
+        for entry in apn_list:
+            apn_id = entry.get("apn_id")
+            apn_name = entry.get("apn", "?")
+            if apn_id is None:
+                continue
+            url = f"{self.base_url}/apn/{apn_id}"
+            try:
+                resp = requests.delete(url, timeout=30)
+                if resp.status_code in (200, 204):
+                    logger.debug(f"PyHSS deleted APN '{apn_name}' (id={apn_id})")
+                else:
+                    logger.warning(
+                        f"PyHSS DELETE /apn/{apn_id} ({apn_name}): "
+                        f"HTTP {resp.status_code}"
+                    )
+                    ok = False
+            except requests.exceptions.RequestException as e:
+                logger.error(f"PyHSS DELETE /apn/{apn_id} ({apn_name}) error: {e}")
+                ok = False
+        return ok
+
+    def _get_auc_list(self) -> Optional[list]:
+        """Fetch all AuC entries from PyHSS (paginated).
+
+        Returns:
+            List of AuC dicts, or None on failure.
+        """
+        return self._fetch_all_pages("auc")
+
+    def _find_auc_id(self, imsi: str) -> Optional[int]:
+        """Find auc_id for a given IMSI by querying the AuC list.
+
+        Args:
+            imsi: Subscriber IMSI
+
+        Returns:
+            auc_id if found, None otherwise.
+        """
+        auc_list = self._get_auc_list()
+        if auc_list is None:
+            return None
+        for entry in auc_list:
+            if entry.get("imsi") == imsi:
+                return entry.get("auc_id")
+        return None
+
+    def _get_subscriber_list(self) -> Optional[list]:
+        """Fetch all subscriber entries from PyHSS (paginated).
+
+        Returns:
+            List of subscriber dicts, or None on failure.
+        """
+        return self._fetch_all_pages("subscriber")
+
+    def _find_subscriber_id(self, imsi: str) -> Optional[int]:
+        """Find the numeric subscriber_id for a given IMSI.
+
+        Args:
+            imsi: Subscriber IMSI
+
+        Returns:
+            subscriber_id if found, None otherwise.
+        """
+        entries = self._get_subscriber_list()
+        if entries is None:
+            return None
+        for entry in entries:
+            if entry.get("imsi") == imsi:
+                return entry.get("subscriber_id")
+        return None
+
+    def _get_ims_subscriber_list(self) -> Optional[list]:
+        """Fetch all IMS subscriber entries from PyHSS (paginated).
+
+        Returns:
+            List of IMS subscriber dicts, or None on failure.
+        """
+        return self._fetch_all_pages("ims_subscriber")
+
+    def _find_ims_subscriber_id(self, imsi: str) -> Optional[int]:
+        """Find ims_subscriber_id for a given IMSI.
+
+        Args:
+            imsi: Subscriber IMSI
+
+        Returns:
+            ims_subscriber_id if found, None otherwise.
+        """
+        entries = self._get_ims_subscriber_list()
+        if entries is None:
+            return None
+        for entry in entries:
+            if entry.get("imsi") == imsi:
+                return entry.get("ims_subscriber_id")
+        return None
+
     def delete_subscriber(self, imsi: str) -> bool:
         """Delete a subscriber and its IMS data from PyHSS.
+
+        Deletion order:
+          1. Query /ims_subscriber/list to find ims_subscriber_id by IMSI
+          2. DELETE /ims_subscriber/{ims_subscriber_id}
+          3. Query /subscriber/list to find subscriber_id by IMSI
+          4. DELETE /subscriber/{subscriber_id}
+          5. Query /auc/list to find auc_id by IMSI
+          6. DELETE /auc/{auc_id}
 
         Args:
             imsi: Subscriber IMSI to delete.
@@ -357,19 +521,137 @@ class PyHSSClient:
             True on success, False otherwise.
         """
         ok = True
-        for resource in ("ims_subscriber", "subscriber", "auc"):
-            url = f"{self.base_url}/{resource}/{imsi}"
+
+        # Step 1 & 2: Query ims_subscriber list, find ID, delete by ID
+        ims_sub_id = self._find_ims_subscriber_id(imsi)
+        if ims_sub_id is not None:
+            url = f"{self.base_url}/ims_subscriber/{ims_sub_id}"
             try:
                 resp = requests.delete(url, timeout=30)
                 if resp.status_code in (200, 204):
-                    logger.debug(f"PyHSS deleted {resource}/{imsi}")
+                    logger.debug(f"PyHSS deleted ims_subscriber/{ims_sub_id} (imsi={imsi})")
                 else:
                     logger.warning(
-                        f"PyHSS DELETE {resource}/{imsi}: "
-                        f"HTTP {resp.status_code}"
+                        f"PyHSS DELETE /ims_subscriber/{ims_sub_id}: HTTP {resp.status_code}"
                     )
                     ok = False
             except requests.exceptions.RequestException as e:
-                logger.error(f"PyHSS DELETE {resource}/{imsi} error: {e}")
+                logger.error(f"PyHSS DELETE /ims_subscriber/{ims_sub_id} error: {e}")
                 ok = False
+        else:
+            logger.warning(f"PyHSS: ims_subscriber_id not found for IMSI {imsi}, skipping")
+
+        # Step 3 & 4: Query subscriber list, find numeric ID, delete by ID
+        sub_id = self._find_subscriber_id(imsi)
+        if sub_id is not None:
+            url = f"{self.base_url}/subscriber/{sub_id}"
+            try:
+                resp = requests.delete(url, timeout=30)
+                if resp.status_code in (200, 204):
+                    logger.debug(f"PyHSS deleted subscriber/{sub_id} (imsi={imsi})")
+                else:
+                    logger.warning(
+                        f"PyHSS DELETE /subscriber/{sub_id}: HTTP {resp.status_code}"
+                    )
+                    ok = False
+            except requests.exceptions.RequestException as e:
+                logger.error(f"PyHSS DELETE /subscriber/{sub_id} error: {e}")
+                ok = False
+        else:
+            logger.warning(f"PyHSS: subscriber_id not found for IMSI {imsi}, skipping")
+
+        # Step 5 & 6: Query AuC list, find auc_id, then delete by auc_id
+        auc_id = self._find_auc_id(imsi)
+        if auc_id is not None:
+            url = f"{self.base_url}/auc/{auc_id}"
+            try:
+                resp = requests.delete(url, timeout=30)
+                if resp.status_code in (200, 204):
+                    logger.debug(f"PyHSS deleted auc/{auc_id} (imsi={imsi})")
+                else:
+                    logger.warning(
+                        f"PyHSS DELETE /auc/{auc_id}: HTTP {resp.status_code}"
+                    )
+                    ok = False
+            except requests.exceptions.RequestException as e:
+                logger.error(f"PyHSS DELETE /auc/{auc_id} error: {e}")
+                ok = False
+        else:
+            logger.warning(f"PyHSS: auc_id not found for IMSI {imsi}, skipping AuC delete")
+
+        return ok
+
+    def delete_all(self) -> bool:
+        """Delete ALL IMS data from PyHSS.
+
+        Deletion order:
+          1. All ims_subscriber entries (by ims_subscriber_id)
+          2. All subscriber entries (by subscriber_id)
+          3. All AuC entries (by auc_id)
+          4. All APN entries (by apn_id)
+
+        Returns:
+            True if all deletions succeeded, False otherwise.
+        """
+        ok = True
+
+        # Step 1: Delete all ims_subscriber entries
+        ims_list = self._fetch_all_pages("ims_subscriber")
+        if ims_list:
+            for entry in ims_list:
+                sid = entry.get("ims_subscriber_id")
+                if sid is None:
+                    continue
+                url = f"{self.base_url}/ims_subscriber/{sid}"
+                try:
+                    resp = requests.delete(url, timeout=30)
+                    if resp.status_code not in (200, 204):
+                        logger.warning(f"PyHSS DELETE /ims_subscriber/{sid}: HTTP {resp.status_code}")
+                        ok = False
+                except requests.exceptions.RequestException as e:
+                    logger.error(f"PyHSS DELETE /ims_subscriber/{sid} error: {e}")
+                    ok = False
+            logger.info(f"PyHSS: deleted {len(ims_list)} ims_subscriber entries")
+
+        # Step 2: Delete all subscriber entries (by numeric subscriber_id)
+        sub_list = self._fetch_all_pages("subscriber")
+        if sub_list:
+            for entry in sub_list:
+                sub_id = entry.get("subscriber_id")
+                if sub_id is None:
+                    continue
+                url = f"{self.base_url}/subscriber/{sub_id}"
+                try:
+                    resp = requests.delete(url, timeout=30)
+                    if resp.status_code not in (200, 204):
+                        logger.warning(f"PyHSS DELETE /subscriber/{sub_id}: HTTP {resp.status_code}")
+                        ok = False
+                except requests.exceptions.RequestException as e:
+                    logger.error(f"PyHSS DELETE /subscriber/{sub_id} error: {e}")
+                    ok = False
+            logger.info(f"PyHSS: deleted {len(sub_list)} subscriber entries")
+
+        # Step 3: Delete all AuC entries
+        auc_list = self._fetch_all_pages("auc")
+        if auc_list:
+            for entry in auc_list:
+                auc_id = entry.get("auc_id")
+                if auc_id is None:
+                    continue
+                url = f"{self.base_url}/auc/{auc_id}"
+                try:
+                    resp = requests.delete(url, timeout=30)
+                    if resp.status_code not in (200, 204):
+                        logger.warning(f"PyHSS DELETE /auc/{auc_id}: HTTP {resp.status_code}")
+                        ok = False
+                except requests.exceptions.RequestException as e:
+                    logger.error(f"PyHSS DELETE /auc/{auc_id} error: {e}")
+                    ok = False
+            logger.info(f"PyHSS: deleted {len(auc_list)} AuC entries")
+
+        # Step 4: Delete all APN entries
+        if not self.delete_apns():
+            ok = False
+
+        logger.info(f"PyHSS: delete_all completed, success={ok}")
         return ok

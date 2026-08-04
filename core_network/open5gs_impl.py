@@ -150,6 +150,10 @@ class Open5GS(CoreNetwork):
 
     def _provision_pyhss(self, imsi: str, imsi_index: int):
         """Provision IMS data to PyHSS. Errors are logged but never propagated."""
+        if self._pyhss_apn_ids is None:
+            logger.warning(f"PyHSS APN IDs not available, skipping IMS for {imsi}")
+            return
+        internet_id, ims_id = self._pyhss_apn_ids
         try:
             msisdn = self._derive_msisdn(imsi_index)
             logger.debug(f"PyHSS provisioning {imsi} (msisdn={msisdn})")
@@ -159,6 +163,8 @@ class Open5GS(CoreNetwork):
                 ki=self.ki,
                 opc=self.opc,
                 amf=self.amf,
+                internet_apn_id=internet_id,
+                ims_apn_id=ims_id,
             )
             if not ims_ok:
                 logger.warning(
@@ -168,15 +174,19 @@ class Open5GS(CoreNetwork):
             logger.error(f"PyHSS IMS provisioning error for {imsi}: {e}")
 
     def _delete_one(self, session: requests.Session, imsi_index: int) -> Tuple[int, bool]:
-        """Delete a single subscription (thread-safe via session). Returns (index, success)."""
+        """Delete a single subscription (thread-safe via session). Returns (index, success).
+
+        Deletion order: PyHSS IMS data first (ims_subscriber -> subscriber -> auc),
+        then the Open5GS WebUI subscriber.
+        """
         imsi = f"{self.plmn_id}{imsi_index:010d}"
+        # Delete PyHSS IMS data first
+        if self.enable_ims and self.pyhss:
+            self.pyhss.delete_subscriber(imsi)
         delete_url = f"{self.subscriber_url}/{imsi}"
         try:
             resp = session.delete(delete_url, timeout=30)
             if resp.status_code in (200, 204):
-                # Also delete from PyHSS
-                if self.enable_ims and self.pyhss:
-                    self.pyhss.delete_subscriber(imsi)
                 return imsi_index, True
         except Exception:
             pass
@@ -187,6 +197,19 @@ class Open5GS(CoreNetwork):
         session = self._authenticate()
         if not session:
             return False
+
+        # Ensure PyHSS APNs exist once before provisioning any subscribers
+        self._pyhss_apn_ids = None
+        if self.enable_ims and self.pyhss:
+            internet_id, ims_id = self.pyhss.ensure_apns()
+            if internet_id is not None and ims_id is not None:
+                self._pyhss_apn_ids = (internet_id, ims_id)
+                logger.info(
+                    f"PyHSS APNs ready: internet={internet_id}, ims={ims_id}"
+                )
+            else:
+                logger.error("PyHSS APN setup failed, IMS provisioning will be skipped")
+
         start_index = self._get_initial_imsi_index()
         indices = list(range(start_index, start_index + count))
         failed = []
@@ -219,6 +242,96 @@ class Open5GS(CoreNetwork):
                     if not ok:
                         failed.append(idx)
                     pbar.update(1)
+
+        # Delete PyHSS APNs once after all subscribers are removed
+        if self.enable_ims and self.pyhss:
+            if not self.pyhss.delete_apns():
+                logger.warning("PyHSS APN deletion had failures")
+
         if failed:
             logger.warning(f"Failed: {len(failed)}/{count}, indices: {self._format_failed_range(failed)}")
         return len(failed) == 0
+
+    def _delete_webui_one(self, session: requests.Session, subscriber: Dict[str, Any]) -> Tuple[str, bool]:
+        """Delete a single WebUI subscriber entry by IMSI. Returns (imsi, success)."""
+        imsi = subscriber.get("imsi", "")
+        try:
+            resp = session.delete(f"{self.subscriber_url}/{imsi}", timeout=30)
+            if resp.status_code in (200, 204):
+                return imsi, True
+            logger.error(f"WebUI delete failed for {imsi}: HTTP {resp.status_code}")
+        except Exception as e:
+            logger.error(f"WebUI delete error for {imsi}: {e}")
+        return imsi, False
+
+    def _delete_all_webui_subscribers(self) -> bool:
+        """Query the WebUI subscriber database and delete every entry.
+
+        Returns:
+            True if all subscribers were deleted, False otherwise.
+        """
+        session = self._authenticate()
+        if not session:
+            logger.error("Authentication failed, cannot delete WebUI subscribers")
+            return False
+
+        try:
+            resp = session.get(self.subscriber_url, timeout=30)
+            if resp.status_code != 200:
+                logger.error(f"Failed to query WebUI subscribers: HTTP {resp.status_code}")
+                return False
+            subscribers = resp.json()
+        except requests.exceptions.RequestException as e:
+            logger.error(f"WebUI subscriber query error: {e}")
+            return False
+
+        if not isinstance(subscribers, list) or not subscribers:
+            logger.info("Open5GS WebUI: no subscribers found")
+            return True
+
+        total = len(subscribers)
+        logger.info(f"Open5GS WebUI: deleting {total} subscribers...")
+        failed = []
+        with ThreadPoolExecutor(max_workers=min(total, 20)) as pool:
+            futures = {pool.submit(self._delete_webui_one, session, sub): sub for sub in subscribers}
+            with tqdm(total=total, desc="Deleting", unit="sub", ncols=80) as pbar:
+                for f in as_completed(futures):
+                    imsi, ok = f.result()
+                    if not ok:
+                        failed.append(imsi)
+                    pbar.update(1)
+        if failed:
+            logger.warning(f"Open5GS WebUI delete failed for {len(failed)}/{total}: {failed}")
+            return False
+        return True
+
+    def delete_all_subscriptions(self) -> bool:
+        """Delete ALL subscriptions from PyHSS and Open5GS WebUI.
+
+        Deletion order:
+          1. PyHSS ims_subscriber, 2. PyHSS subscriber,
+          3. PyHSS auc, 4. PyHSS apn,
+          5. every Open5GS WebUI subscriber.
+
+        Returns:
+            True on success, False otherwise.
+        """
+        logger.info("Deleting ALL subscriptions (PyHSS + Open5GS WebUI)...")
+        ok = True
+
+        # 1. Delete all from PyHSS first (ims_subscriber -> subscriber -> auc -> apn)
+        if self.enable_ims and self.pyhss:
+            if not self.pyhss.delete_all():
+                logger.warning("PyHSS delete_all had failures")
+                ok = False
+            else:
+                logger.info("PyHSS: all IMS data deleted")
+
+        # 2. Delete all Open5GS WebUI subscribers
+        if not self._delete_all_webui_subscribers():
+            logger.warning("Open5GS WebUI delete-all had failures")
+            ok = False
+        else:
+            logger.info("Open5GS WebUI: all subscribers deleted")
+
+        return ok

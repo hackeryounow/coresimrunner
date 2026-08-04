@@ -31,7 +31,7 @@ from coresimrunner.sequential_reg_runner import SequentialRegRunner
 from coresimrunner.vonr_session import VoNRSessionRunner
 
 
-def provision_subscriptions(count: int, core_network_type: str, delete: bool = False):
+def provision_subscriptions(count: int, core_network_type: str, delete: bool = False, delete_all: bool = False):
     """
     Provision or delete subscriptions in the specified core network.
     
@@ -39,6 +39,7 @@ def provision_subscriptions(count: int, core_network_type: str, delete: bool = F
         count: Number of subscriptions to provision/delete
         core_network_type: Type of core network ('free5gc', 'open5gs', 'custom')
         delete: If True, delete subscriptions instead of provisioning
+        delete_all: If True, delete ALL subscriptions (ignores count)
     """
     try:
         config_loader = ConfigLoader()
@@ -46,6 +47,13 @@ def provision_subscriptions(count: int, core_network_type: str, delete: bool = F
         if core_network is None:
             logger.error(f"Unsupported core network type '{core_network_type}'")
             return False
+        
+        if delete_all:
+            logger.info(f"Deleting ALL subscriptions on {core_network_type}...")
+            success = core_network.delete_all_subscriptions()
+            if success:
+                logger.info("All subscriptions deleted successfully")
+            return success
         
         action = "Delete" if delete else "Provision"
         logger.info(f"{action}ing {count} subscriptions on {core_network_type}...")
@@ -433,6 +441,9 @@ Examples:
   # Delete subscriptions
   %(prog)s --count 2 --core-network free5gc --delete
   %(prog)s --count 5 --core-network open5gs --delete
+
+  # Delete ALL: PyHSS data (ims_subscriber -> subscriber -> auc -> apn) then Open5GS WebUI subscribers - ignores --count
+  %(prog)s --core-network open5gs --delete-all
   
   # Run 5G test (all params from .env)
   %(prog)s --mode ue-test --core-network open5gs
@@ -481,6 +492,12 @@ Examples:
     parser.add_argument(
         "--delete",
         help="Delete subscriptions instead of provisioning them (only for provision mode)",
+        action="store_true",
+        default=False
+    )
+    parser.add_argument(
+        "--delete-all",
+        help="Delete ALL subscriptions: first all PyHSS data in order (ims_subscriber, subscriber, auc, apn), then every Open5GS WebUI subscriber. Ignores --count, only for provision mode with open5gs",
         action="store_true",
         default=False
     )
@@ -667,7 +684,7 @@ Examples:
         
         if args.mode == "provision":
             count = args.count if args.count is not None else config_loader.get_int("DEFAULT_SUBSCRIPTION_COUNT", 2)
-            success = provision_subscriptions(count, args.core_network, args.delete)
+            success = provision_subscriptions(count, args.core_network, args.delete, args.delete_all)
             if not success:
                 sys.exit(1)
                     

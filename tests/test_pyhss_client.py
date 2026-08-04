@@ -64,14 +64,15 @@ class TestConstructor(unittest.TestCase):
 
     def test_realm_and_scscf(self):
         c = PyHSSClient(BASE_URL, MCC, MNC)
-        self.assertEqual(c.realm, "ims.mnc09.mcc460.3gppnetwork.org")
+        # 2-digit MNC '09' must be zero-padded to '009'
+        self.assertEqual(c.realm, "ims.mnc009.mcc460.3gppnetwork.org")
         self.assertEqual(
             c.scscf_uri,
-            "sip:scscf.ims.mnc09.mcc460.3gppnetwork.org:6060",
+            "sip:scscf.ims.mnc009.mcc460.3gppnetwork.org:6060",
         )
         self.assertEqual(
             c.scscf_peer,
-            "scscf.ims.mnc09.mcc460.3gppnetwork.org",
+            "scscf.ims.mnc009.mcc460.3gppnetwork.org",
         )
 
     def test_trailing_slash_stripped(self):
@@ -80,7 +81,8 @@ class TestConstructor(unittest.TestCase):
 
     def test_different_plmn(self):
         c = PyHSSClient(BASE_URL, "001", "01")
-        self.assertEqual(c.realm, "ims.mnc01.mcc001.3gppnetwork.org")
+        # 2-digit MNC '01' must be zero-padded to '001'
+        self.assertEqual(c.realm, "ims.mnc001.mcc001.3gppnetwork.org")
 
 
 # ==================================================================
@@ -350,11 +352,11 @@ class TestCreateImsSubscriber(unittest.TestCase):
                 "imsi": IMSI,
                 "msisdn": MSISDN,
                 "sh_profile": "string",
-                "scscf_peer": "scscf.ims.mnc09.mcc460.3gppnetwork.org",
+                "scscf_peer": "scscf.ims.mnc009.mcc460.3gppnetwork.org",
                 "msisdn_list": f"[{MSISDN}]",
                 "ifc_path": "default_ifc.xml",
-                "scscf": "sip:scscf.ims.mnc09.mcc460.3gppnetwork.org:6060",
-                "scscf_realm": "ims.mnc09.mcc460.3gppnetwork.org",
+                "scscf": "sip:scscf.ims.mnc009.mcc460.3gppnetwork.org:6060",
+                "scscf_realm": "ims.mnc009.mcc460.3gppnetwork.org",
             },
             headers={"Content-Type": "application/json"},
             timeout=30,
@@ -367,16 +369,17 @@ class TestCreateImsSubscriber(unittest.TestCase):
         mock_put.return_value = _make_response(200, {})
         client.create_ims_subscriber("208930000000001", "33600000001")
         payload = mock_put.call_args[1]["json"]
+        # 2-digit MNC '93' must be zero-padded to '093'
         self.assertEqual(
             payload["scscf"],
-            "sip:scscf.ims.mnc93.mcc208.3gppnetwork.org:6060",
+            "sip:scscf.ims.mnc093.mcc208.3gppnetwork.org:6060",
         )
         self.assertEqual(
-            payload["scscf_realm"], "ims.mnc93.mcc208.3gppnetwork.org"
+            payload["scscf_realm"], "ims.mnc093.mcc208.3gppnetwork.org"
         )
         self.assertEqual(
             payload["scscf_peer"],
-            "scscf.ims.mnc93.mcc208.3gppnetwork.org",
+            "scscf.ims.mnc093.mcc208.3gppnetwork.org",
         )
 
     @patch("core_network.pyhss_client.requests.put")
@@ -479,6 +482,41 @@ class TestProvisionImsSubscriber(unittest.TestCase):
         # default_apn = internet (5), apn_list = "5,9"
         mock_sub.assert_called_once_with(IMSI, 20, 5, "5,9", MSISDN)
 
+    @patch.object(PyHSSClient, "create_ims_subscriber")
+    @patch.object(PyHSSClient, "create_subscriber")
+    @patch.object(PyHSSClient, "create_auc")
+    @patch.object(PyHSSClient, "ensure_apns")
+    def test_prefetched_apn_ids_skip_ensure(self, mock_apns, mock_auc, mock_sub, mock_ims):
+        """When APN IDs are provided, ensure_apns() should NOT be called."""
+        mock_auc.return_value = 10
+        mock_sub.return_value = True
+        mock_ims.return_value = True
+
+        result = self.client.provision_ims_subscriber(
+            IMSI, MSISDN, KI, OPC,
+            internet_apn_id=3, ims_apn_id=7,
+        )
+        self.assertTrue(result)
+        mock_apns.assert_not_called()
+        mock_auc.assert_called_once_with(IMSI, KI, OPC, AMF)
+        mock_sub.assert_called_once_with(IMSI, 10, 3, "3,7", MSISDN)
+        mock_ims.assert_called_once_with(IMSI, MSISDN)
+
+    @patch.object(PyHSSClient, "create_ims_subscriber")
+    @patch.object(PyHSSClient, "create_subscriber")
+    @patch.object(PyHSSClient, "create_auc")
+    @patch.object(PyHSSClient, "ensure_apns")
+    def test_no_apn_ids_calls_ensure(self, mock_apns, mock_auc, mock_sub, mock_ims):
+        """When APN IDs are NOT provided, ensure_apns() should be called."""
+        mock_apns.return_value = (1, 2)
+        mock_auc.return_value = 10
+        mock_sub.return_value = True
+        mock_ims.return_value = True
+
+        result = self.client.provision_ims_subscriber(IMSI, MSISDN, KI, OPC)
+        self.assertTrue(result)
+        mock_apns.assert_called_once()
+
 
 # ==================================================================
 # Delete — delete_subscriber
@@ -489,33 +527,301 @@ class TestDeleteSubscriber(unittest.TestCase):
         self.client = PyHSSClient(BASE_URL, MCC, MNC)
 
     @patch("core_network.pyhss_client.requests.delete")
-    def test_success(self, mock_del):
+    @patch("core_network.pyhss_client.requests.get")
+    def test_success(self, mock_get, mock_del):
+        """Full success: ims_subscriber by ID, subscriber by subscriber_id, auc by auc_id."""
+        # mock_get is called 3 times: ims_subscriber/list, subscriber/list, auc/list
+        mock_get.side_effect = [
+            _make_response(200, [{"ims_subscriber_id": 7, "imsi": IMSI}]),
+            _make_response(200, [{"subscriber_id": 5, "imsi": IMSI}]),
+            _make_response(200, [{"auc_id": 42, "imsi": IMSI}]),
+        ]
         mock_del.return_value = _make_response(200)
         result = self.client.delete_subscriber(IMSI)
         self.assertTrue(result)
         self.assertEqual(mock_del.call_count, 3)
-        # Verify all three resources were deleted
         urls = [c[0][0] for c in mock_del.call_args_list]
-        self.assertIn(f"{BASE_URL}/ims_subscriber/{IMSI}", urls)
-        self.assertIn(f"{BASE_URL}/subscriber/{IMSI}", urls)
-        self.assertIn(f"{BASE_URL}/auc/{IMSI}", urls)
+        self.assertIn(f"{BASE_URL}/ims_subscriber/7", urls)
+        self.assertIn(f"{BASE_URL}/subscriber/5", urls)
+        self.assertIn(f"{BASE_URL}/auc/42", urls)
 
     @patch("core_network.pyhss_client.requests.delete")
-    def test_partial_failure(self, mock_del):
+    @patch("core_network.pyhss_client.requests.get")
+    def test_ims_subscriber_not_found(self, mock_get, mock_del):
+        """When IMSI not in ims_subscriber list, skip that delete."""
+        mock_get.side_effect = [
+            _make_response(200, [{"ims_subscriber_id": 99, "imsi": "other"}]),
+            _make_response(200, [{"subscriber_id": 5, "imsi": IMSI}]),
+            _make_response(200, [{"auc_id": 1, "imsi": IMSI}]),
+        ]
+        mock_del.return_value = _make_response(200)
+        result = self.client.delete_subscriber(IMSI)
+        self.assertTrue(result)
+        self.assertEqual(mock_del.call_count, 2)  # subscriber + auc only
+
+    @patch("core_network.pyhss_client.requests.delete")
+    @patch("core_network.pyhss_client.requests.get")
+    def test_auc_not_found(self, mock_get, mock_del):
+        """When IMSI not in AuC list, skip AuC delete."""
+        mock_get.side_effect = [
+            _make_response(200, [{"ims_subscriber_id": 1, "imsi": IMSI}]),
+            _make_response(200, [{"subscriber_id": 5, "imsi": IMSI}]),
+            _make_response(200, [{"auc_id": 99, "imsi": "other"}]),
+        ]
+        mock_del.return_value = _make_response(200)
+        result = self.client.delete_subscriber(IMSI)
+        self.assertTrue(result)
+        self.assertEqual(mock_del.call_count, 2)  # ims_subscriber + subscriber only
+
+    @patch("core_network.pyhss_client.requests.delete")
+    @patch("core_network.pyhss_client.requests.get")
+    def test_subscriber_not_found(self, mock_get, mock_del):
+        """When IMSI not in subscriber list, skip subscriber delete."""
+        mock_get.side_effect = [
+            _make_response(200, [{"ims_subscriber_id": 1, "imsi": IMSI}]),
+            _make_response(200, [{"subscriber_id": 99, "imsi": "other"}]),
+            _make_response(200, [{"auc_id": 1, "imsi": IMSI}]),
+        ]
+        mock_del.return_value = _make_response(200)
+        result = self.client.delete_subscriber(IMSI)
+        self.assertTrue(result)
+        self.assertEqual(mock_del.call_count, 2)  # ims_subscriber + auc only
+
+    @patch("core_network.pyhss_client.requests.delete")
+    @patch("core_network.pyhss_client.requests.get")
+    def test_both_lists_empty(self, mock_get, mock_del):
+        """When all lists are empty, no deletes are attempted."""
+        mock_get.side_effect = [
+            _make_response(200, []),  # ims_subscriber empty
+            _make_response(200, []),  # subscriber empty
+            _make_response(200, []),  # auc empty
+        ]
+        mock_del.return_value = _make_response(200)
+        result = self.client.delete_subscriber(IMSI)
+        self.assertTrue(result)
+        mock_del.assert_not_called()
+
+    @patch("core_network.pyhss_client.requests.delete")
+    @patch("core_network.pyhss_client.requests.get")
+    def test_partial_failure(self, mock_get, mock_del):
+        """If one DELETE fails, return False."""
+        mock_get.side_effect = [
+            _make_response(200, [{"ims_subscriber_id": 1, "imsi": IMSI}]),
+            _make_response(200, [{"subscriber_id": 5, "imsi": IMSI}]),
+            _make_response(200, [{"auc_id": 1, "imsi": IMSI}]),
+        ]
         mock_del.side_effect = [
-            _make_response(200),
-            _make_response(404),
-            _make_response(200),
+            _make_response(200),   # ims_subscriber OK
+            _make_response(404),   # subscriber fails
+            _make_response(200),   # auc OK
         ]
         result = self.client.delete_subscriber(IMSI)
         self.assertFalse(result)
 
     @patch("core_network.pyhss_client.requests.delete")
-    def test_network_error(self, mock_del):
+    @patch("core_network.pyhss_client.requests.get")
+    def test_network_error(self, mock_get, mock_del):
+        """Network error during DELETE should return False."""
         import requests as req
+        mock_get.side_effect = [
+            _make_response(200, [{"ims_subscriber_id": 1, "imsi": IMSI}]),
+            _make_response(200, [{"subscriber_id": 5, "imsi": IMSI}]),
+            _make_response(200, [{"auc_id": 1, "imsi": IMSI}]),
+        ]
         mock_del.side_effect = req.exceptions.ConnectionError("refused")
         result = self.client.delete_subscriber(IMSI)
         self.assertFalse(result)
+
+
+# ==================================================================
+# Pagination — _fetch_all_pages
+# ==================================================================
+
+class TestFetchAllPages(unittest.TestCase):
+    def setUp(self):
+        self.client = PyHSSClient(BASE_URL, MCC, MNC)
+
+    @patch("core_network.pyhss_client.requests.get")
+    def test_single_page(self, mock_get):
+        """When results fit in one page, only one request is made."""
+        entries = [{"apn_id": 1, "apn": "internet"}]
+        mock_get.return_value = _make_response(200, entries)
+        result = self.client._fetch_all_pages("apn")
+        self.assertEqual(result, entries)
+        mock_get.assert_called_once()
+
+    @patch("core_network.pyhss_client.requests.get")
+    def test_multiple_pages(self, mock_get):
+        """When results span multiple pages, all are fetched."""
+        page0 = [{"id": i} for i in range(200)]  # full page
+        page1 = [{"id": 200}, {"id": 201}]       # partial page
+        mock_get.side_effect = [
+            _make_response(200, page0),
+            _make_response(200, page1),
+        ]
+        result = self.client._fetch_all_pages("auc")
+        self.assertEqual(len(result), 202)
+        self.assertEqual(mock_get.call_count, 2)
+
+    @patch("core_network.pyhss_client.requests.get")
+    def test_empty_result(self, mock_get):
+        """Empty first page returns empty list."""
+        mock_get.return_value = _make_response(200, [])
+        result = self.client._fetch_all_pages("apn")
+        self.assertEqual(result, [])
+
+    @patch("core_network.pyhss_client.requests.get")
+    def test_http_error(self, mock_get):
+        """HTTP error returns None."""
+        mock_get.return_value = _make_response(500)
+        result = self.client._fetch_all_pages("apn")
+        self.assertIsNone(result)
+
+    @patch("core_network.pyhss_client.requests.get")
+    def test_network_error(self, mock_get):
+        """Network error returns None."""
+        import requests as req
+        mock_get.side_effect = req.exceptions.ConnectionError("refused")
+        result = self.client._fetch_all_pages("apn")
+        self.assertIsNone(result)
+
+
+# ==================================================================
+# Delete All — delete_all
+# ==================================================================
+
+class TestDeleteAll(unittest.TestCase):
+    def setUp(self):
+        self.client = PyHSSClient(BASE_URL, MCC, MNC)
+
+    @patch.object(PyHSSClient, "delete_apns")
+    @patch("core_network.pyhss_client.requests.delete")
+    @patch("core_network.pyhss_client.requests.get")
+    def test_delete_all_success(self, mock_get, mock_del, mock_apns):
+        """Full delete_all: ims_subscriber, subscriber, auc, apn."""
+        # _fetch_all_pages is called 4 times: ims_subscriber, subscriber, auc, apn
+        # Short pages (len < PAGE_SIZE) terminate pagination, so each
+        # resource query consumes exactly one GET response here.
+        mock_get.side_effect = [
+            _make_response(200, [{"ims_subscriber_id": 1, "imsi": IMSI}]),
+            _make_response(200, [{"subscriber_id": 5, "imsi": IMSI}]),
+            _make_response(200, [{"auc_id": 10, "imsi": IMSI}]),
+        ]
+        mock_del.return_value = _make_response(200)
+        mock_apns.return_value = True
+
+        result = self.client.delete_all()
+        self.assertTrue(result)
+        # 3 DELETE calls: ims_subscriber/1, subscriber/5, auc/10
+        self.assertEqual(mock_del.call_count, 3)
+        urls = [c[0][0] for c in mock_del.call_args_list]
+        self.assertIn(f"{BASE_URL}/ims_subscriber/1", urls)
+        self.assertIn(f"{BASE_URL}/subscriber/5", urls)
+        self.assertIn(f"{BASE_URL}/auc/10", urls)
+        mock_apns.assert_called_once()
+
+    @patch.object(PyHSSClient, "delete_apns")
+    @patch("core_network.pyhss_client.requests.delete")
+    @patch("core_network.pyhss_client.requests.get")
+    def test_delete_all_empty(self, mock_get, mock_del, mock_apns):
+        """When all lists are empty, no DELETE calls are made."""
+        mock_get.return_value = _make_response(200, [])
+        mock_apns.return_value = True
+
+        result = self.client.delete_all()
+        self.assertTrue(result)
+        mock_del.assert_not_called()
+        mock_apns.assert_called_once()
+
+    @patch.object(PyHSSClient, "delete_apns")
+    @patch("core_network.pyhss_client.requests.delete")
+    @patch("core_network.pyhss_client.requests.get")
+    def test_delete_all_apn_failure(self, mock_get, mock_del, mock_apns):
+        """If APN deletion fails, delete_all returns False."""
+        mock_get.return_value = _make_response(200, [])
+        mock_apns.return_value = False
+
+        result = self.client.delete_all()
+        self.assertFalse(result)
+
+
+# ==================================================================
+# Delete APNs — delete_apns
+# ==================================================================
+
+class TestDeleteApns(unittest.TestCase):
+    def setUp(self):
+        self.client = PyHSSClient(BASE_URL, MCC, MNC)
+
+    @patch("core_network.pyhss_client.requests.delete")
+    @patch("core_network.pyhss_client.requests.get")
+    def test_delete_multiple_apns(self, mock_get, mock_del):
+        """Delete all APNs returned by the list query."""
+        apns = [
+            {"apn_id": 1, "apn": "internet", "apn_ambr_dl": 0, "apn_ambr_ul": 0},
+            {"apn_id": 2, "apn": "ims", "apn_ambr_dl": 0, "apn_ambr_ul": 0},
+        ]
+        mock_get.return_value = _make_response(200, apns)
+        mock_del.return_value = _make_response(200)
+
+        result = self.client.delete_apns()
+        self.assertTrue(result)
+        self.assertEqual(mock_del.call_count, 2)
+        # Verify correct URLs
+        urls = [c[0][0] for c in mock_del.call_args_list]
+        self.assertIn(f"{BASE_URL}/apn/1", urls)
+        self.assertIn(f"{BASE_URL}/apn/2", urls)
+
+    @patch("core_network.pyhss_client.requests.delete")
+    @patch("core_network.pyhss_client.requests.get")
+    def test_empty_apn_list(self, mock_get, mock_del):
+        """When no APNs exist, no DELETE requests are made."""
+        mock_get.return_value = _make_response(200, [])
+        result = self.client.delete_apns()
+        self.assertTrue(result)
+        mock_del.assert_not_called()
+
+    @patch("core_network.pyhss_client.requests.get")
+    def test_query_failure(self, mock_get):
+        """If /apn/list query fails, return False."""
+        mock_get.return_value = _make_response(500)
+        result = self.client.delete_apns()
+        self.assertFalse(result)
+
+    @patch("core_network.pyhss_client.requests.delete")
+    @patch("core_network.pyhss_client.requests.get")
+    def test_partial_delete_failure(self, mock_get, mock_del):
+        """If one DELETE fails, return False."""
+        apns = [
+            {"apn_id": 1, "apn": "internet"},
+            {"apn_id": 2, "apn": "ims"},
+        ]
+        mock_get.return_value = _make_response(200, apns)
+        mock_del.side_effect = [
+            _make_response(200),
+            _make_response(500),
+        ]
+        result = self.client.delete_apns()
+        self.assertFalse(result)
+
+    @patch("core_network.pyhss_client.requests.delete")
+    @patch("core_network.pyhss_client.requests.get")
+    def test_delete_network_error(self, mock_get, mock_del):
+        """Network error during DELETE should return False."""
+        import requests as req
+        mock_get.return_value = _make_response(200, [{"apn_id": 1, "apn": "internet"}])
+        mock_del.side_effect = req.exceptions.ConnectionError("refused")
+        result = self.client.delete_apns()
+        self.assertFalse(result)
+
+    @patch("core_network.pyhss_client.requests.delete")
+    @patch("core_network.pyhss_client.requests.get")
+    def test_delete_204(self, mock_get, mock_del):
+        """HTTP 204 should also be treated as success."""
+        mock_get.return_value = _make_response(200, [{"apn_id": 1, "apn": "internet"}])
+        mock_del.return_value = _make_response(204)
+        result = self.client.delete_apns()
+        self.assertTrue(result)
 
 
 # ==================================================================

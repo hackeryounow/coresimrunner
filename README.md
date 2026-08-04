@@ -262,6 +262,7 @@ Override `.env` settings with command-line arguments:
 | `--tac` | Tracking Area Code | `000001` |
 | `--log-level` | Logging verbosity | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
 | `--delete` | Delete mode (provision only) | *(flag)* |
+| `--delete-all` | Delete ALL: pyHSS data (ims_subscriber → subscriber → auc → apn) + WebUI subscribers (provision only) | *(flag)* |
 
 ## 📞 IMS Provisioning (pyHSS)
 
@@ -300,9 +301,10 @@ For each subscriber, the following 4-step sequence is executed against pyHSS:
 ### Key Behaviors
 
 * **Idempotent APN creation**: Queries existing APNs first; only creates missing ones. Existing `apn_id`s are reused.
-* **PLMN-derived S-CSCF**: The `scscf`, `scscf_peer`, and `scscf_realm` fields are automatically derived from the configured `PLMN` (MCC + MNC).
+* **PLMN-derived S-CSCF**: The `scscf`, `scscf_peer`, and `scscf_realm` fields are automatically derived from the configured `PLMN` (MCC + MNC). A 2-digit MNC is zero-padded to 3 digits per 3GPP (e.g., `PLMN=46009` → `ims.mnc009.mcc460.3gppnetwork.org`).
 * **MSISDN derivation**: Uses the prefix from the subscription template (first 3 digits) + zero-padded IMSI index. E.g., template `"13300000001"` → prefix `133` + index `00000042` → MSISDN `13300000042`.
 * **Delete cleanup**: `--delete` removes the subscriber from pyHSS as well (ims_subscriber, subscriber, auc).
+* **Delete all**: `--delete-all` wipes everything in a fixed order — first pyHSS `ims_subscriber` → `subscriber` → `auc` → `apn`, then every Open5GS WebUI subscriber. pyHSS list queries paginate automatically (`page_size=200`, no 200-entry limit).
 
 ### Configuration
 
@@ -332,14 +334,18 @@ python3 coresim_runner.py --mode provision --count 5 --core-network open5gs
 
 # Delete 5 subscribers (Open5GS + pyHSS cleanup)
 python3 coresim_runner.py --mode provision --count 5 --delete --core-network open5gs
+
+# Delete ALL subscriptions: pyHSS data first (ims_subscriber -> subscriber -> auc -> apn),
+# then every Open5GS WebUI subscriber. Ignores --count.
+python3 coresim_runner.py --mode provision --delete-all --core-network open5gs
 ```
 
 ### Unit Tests
 
-39 unit tests with mocked HTTP (no live pyHSS needed):
+66 unit tests with mocked HTTP (no live pyHSS/Open5GS needed):
 
 ```bash
-python3 -m pytest tests/test_pyhss_client.py -v
+python3 -m pytest tests/test_pyhss_client.py tests/test_open5gs_delete_all.py -v
 ```
 
 ## 📊 Output & Reporting

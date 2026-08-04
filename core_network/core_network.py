@@ -47,6 +47,19 @@ class CoreNetwork(ABC):
         """
         pass
     
+    def delete_all_subscriptions(self) -> bool:
+        """Delete ALL subscriptions from the core network.
+        
+        Default implementation is a no-op. Override in subclasses
+        that support bulk deletion (e.g., Open5GS with PyHSS).
+        
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        from loguru import logger
+        logger.warning(f"delete_all_subscriptions not supported for {self.name}")
+        return False
+    
     def _get_initial_imsi_index(self) -> int:
         """Get the initial IMSI index from configuration.
         
