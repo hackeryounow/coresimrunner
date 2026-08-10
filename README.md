@@ -79,11 +79,36 @@ Both core networks support the same feature set with identical command-line inte
 ### Dependencies
 
 * **pycrate**: ASN.1 encoding/decoding library (included in workspace)
-* **CryptoMobile**: 3GPP cryptographic algorithms (included in workspace)
+* **CryptoMobile**: 3GPP cryptographic algorithms (installed separately, see below)
 * **loguru**: Advanced logging library
 * **requests**: HTTP client for core network API calls
 
 All dependencies are automatically managed by the setup script.
+
+### CryptoMobile Installation
+
+CryptoMobile is not on PyPI and must be installed from source.
+
+> ⚠️ **Do NOT clone the repository into this project.** Install it from a
+> temporary directory and remove the clone afterwards, so the project tree
+> stays clean.
+
+```bash
+# Install from a temporary directory (e.g., /tmp)
+cd /tmp
+git clone https://github.com/mitshell/CryptoMobile.git
+cd CryptoMobile
+python3 -m pip install .
+
+# Clean up the temporary clone
+cd /tmp && rm -rf CryptoMobile
+```
+
+Verify the installation:
+
+```bash
+python3 -c "from CryptoMobile.Milenage import Milenage; print('CryptoMobile OK')"
+```
 
 ## 🚀 Quick Start
 

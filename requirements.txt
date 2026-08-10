@@ -17,7 +17,10 @@ tqdm>=4.60.0
 pycrate==0.7.9
 
 # 3GPP Milenage authentication algorithms
-CryptoMobile>=0.3.0
+# NOTE: CryptoMobile is NOT on PyPI — install from source in a temp dir:
+#   cd /tmp && git clone https://github.com/mitshell/CryptoMobile.git \
+#     && cd CryptoMobile && python3 -m pip install . && cd /tmp && rm -rf CryptoMobile
+# See README.md "CryptoMobile Installation" for details.
 
 # SCTP socket bindings for NGAP (5G) and S1AP (4G) transport
 # Requires: sudo apt-get install libsctp-dev
