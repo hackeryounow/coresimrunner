@@ -28,7 +28,7 @@ from coresimrunner.ue_test_runner import UETestRunner
 from coresimrunner.integration.integrated_4g_gnb import Integrated4GGNB
 from coresimrunner.integration.integrated_4g_ue import _format_sgw_addr, _format_teid
 from coresimrunner.sequential_reg_runner import SequentialRegRunner
-from coresimrunner.vonr_session import VoNRSessionRunner
+from coresimrunner.ims.vonr_session import VoNRSessionRunner
 
 
 def provision_subscriptions(count: int, core_network_type: str, delete: bool = False, delete_all: bool = False):
