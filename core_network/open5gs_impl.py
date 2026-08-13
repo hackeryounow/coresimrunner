@@ -10,6 +10,8 @@ registration works end-to-end.
 """
 
 import json
+import copy
+import os
 import time
 from typing import Dict, Any, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -116,8 +118,11 @@ class Open5GS(CoreNetwork):
     def _derive_msisdn(self, imsi_index: int) -> str:
         """Derive MSISDN from IMSI index.
 
-        Uses the msisdn pattern from the subscription template
-        (e.g., '13300000001' for index 1).
+        Uses the msisdn pattern from the subscription template:
+        keeps the leading digits that are identical across all
+        template entries as a fixed prefix, and replaces the
+        remaining trailing digits with the zero-padded index.
+        E.g., template '13300000001' -> index 42 -> '13300000042'.
 
         Args:
             imsi_index: Numeric IMSI index
@@ -127,16 +132,27 @@ class Open5GS(CoreNetwork):
         """
         template_msisdn = self.subscription_template.get("msisdn", ["13300000001"])
         if template_msisdn and len(template_msisdn) > 0:
-            # Use prefix from template (first 3 digits) + zero-padded index
-            prefix = template_msisdn[0][:3]
-            return f"{prefix}{imsi_index:08d}"
+            first = template_msisdn[0]
+            # Common prefix across all template entries (min. 3 digits)
+            if len(template_msisdn) > 1:
+                prefix = os.path.commonprefix(template_msisdn)
+            else:
+                prefix = first
+            # Variable part = digits after the fixed prefix (min. 4 digits
+            # so the index has enough room)
+            var_len = max(len(first) - max(len(prefix), 3), 4)
+            prefix = first[:len(first) - var_len]
+            return f"{prefix}{imsi_index:0{var_len}d}"
         return f"133{imsi_index:08d}"
 
     def _provision_one(self, session: requests.Session, imsi_index: int) -> Tuple[int, bool]:
         """Provision a single subscription (thread-safe via session). Returns (index, success)."""
         imsi = f"{self.plmn_id}{imsi_index:010d}"
-        subscription_data = self.subscription_template.copy()
+        subscription_data = copy.deepcopy(self.subscription_template)
         subscription_data["imsi"] = imsi
+        # Assign a unique MSISDN derived from the IMSI index instead of
+        # reusing the hardcoded template value for every subscriber
+        subscription_data["msisdn"] = [self._derive_msisdn(imsi_index)]
         try:
             resp = session.post(self.subscriber_url, data=json.dumps(subscription_data), timeout=30)
             if resp.status_code == 201:

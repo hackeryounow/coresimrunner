@@ -13,6 +13,7 @@ Run:
 
 import sys
 import os
+import json
 import unittest
 from unittest.mock import patch, MagicMock
 
@@ -184,6 +185,50 @@ class TestDeleteAllSubscriptions(unittest.TestCase):
 
         self.assertTrue(o5.delete_all_subscriptions())
         self.assertEqual(session.delete.call_count, 1)
+
+
+# ------------------------------------------------------------------
+# Provisioning — unique MSISDN per subscriber
+# ------------------------------------------------------------------
+
+class TestProvisionMsisdn(unittest.TestCase):
+    """Every Open5GS subscriber must get a unique MSISDN derived from
+    the IMSI index instead of the hardcoded template value."""
+
+    @patch.object(Open5GS, "_authenticate")
+    def test_unique_msisdn_per_subscriber(self, mock_auth):
+        o5 = _make_open5gs()
+        o5.pyhss.ensure_apns.return_value = (1, 2)
+        session = MagicMock()
+        session.post.return_value = _make_response(201)
+        mock_auth.return_value = session
+
+        self.assertTrue(o5.provision_subscriptions(3))
+
+        payloads = [
+            json.loads(c.kwargs["data"]) for c in session.post.call_args_list
+        ]
+        msisdns = [p["msisdn"] for p in payloads]
+        # Template starts at index 1 with '13300000001'
+        self.assertEqual(
+            sorted(msisdns),
+            [["13300000001"], ["13300000002"], ["13300000003"]],
+        )
+        # No duplicates
+        self.assertEqual(len(set(map(tuple, msisdns))), 3)
+
+    def test_derive_msisdn_values(self):
+        o5 = _make_open5gs()
+        self.assertEqual(o5._derive_msisdn(1), "13300000001")
+        self.assertEqual(o5._derive_msisdn(42), "13300000042")
+        self.assertEqual(o5._derive_msisdn(9999), "13300009999")
+
+    def test_template_not_mutated(self):
+        """Deriving MSISDNs must not alter the shared template."""
+        o5 = _make_open5gs()
+        before = json.dumps(o5.subscription_template)
+        o5._derive_msisdn(7)
+        self.assertEqual(json.dumps(o5.subscription_template), before)
 
 
 if __name__ == "__main__":
