@@ -10,7 +10,7 @@ import os
 import time
 
 # Add paths for imports
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..'))
 sys.path.insert(0, '/root/pycrate')
 sys.path.insert(0, '/root/CryptoMobile')
 

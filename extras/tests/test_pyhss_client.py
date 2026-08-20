@@ -17,7 +17,7 @@ import unittest
 from unittest.mock import patch, MagicMock, call
 
 # Add project root to path
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from core_network.pyhss_client import PyHSSClient
 

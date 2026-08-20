@@ -38,7 +38,7 @@ import argparse
 from binascii import hexlify, unhexlify
 
 # Add paths for internal imports
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..'))
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..'))
 sys.path.insert(0, '/root/pycrate')
 sys.path.insert(0, '/root/CryptoMobile')
 

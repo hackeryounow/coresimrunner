@@ -18,8 +18,8 @@ import unittest
 from unittest.mock import patch, MagicMock
 
 # Add project root (for core_network.*) and its parent (for coresimrunner.*)
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
 from core_network.open5gs_impl import Open5GS
 
