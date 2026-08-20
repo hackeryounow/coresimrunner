@@ -30,7 +30,7 @@ class ConfigLoader:
     """
     
     def __init__(self, env_file: str = None, profile_name: str = None,
-                 profiles_dir: str = None):
+                 profiles_dir: str = None, overrides: Dict[str, str] = None):
         """Initialize the configuration loader.
         
         Args:
@@ -40,8 +40,11 @@ class ConfigLoader:
                          Resolved to {profiles_dir}/{profile_name}.env.
             profiles_dir: Directory containing profile .env files.
                          Defaults to backend/data/profiles/.
+            overrides: Runtime key-value overrides (e.g., from CLI args).
+                      These take precedence over values in the .env file.
         """
         self.profiles_dir = profiles_dir or os.path.normpath(_DEFAULT_PROFILES_DIR)
+        self._overrides: Dict[str, str] = dict(overrides or {})
         
         if env_file is not None:
             # Backward compatible: explicit file path
@@ -85,6 +88,13 @@ class ConfigLoader:
         packaged_env = os.path.join(_PACKAGE_DIR, ".env")
         if os.path.exists(packaged_env):
             return packaged_env
+        
+        # Installs from GitHub only ship .env.example (.env is
+        # gitignored) — use it as the final fallback so the CLI works
+        # out of the box; copy it to .env and edit for real usage
+        packaged_example = os.path.join(_PACKAGE_DIR, ".env.example")
+        if os.path.exists(packaged_example):
+            return packaged_example
         return ".env"
     
     def _load_env_file(self):
@@ -115,8 +125,19 @@ class ConfigLoader:
                         
                         self._config[key] = value
     
+    def set_override(self, key: str, value: str):
+        """Set a runtime override (takes precedence over the .env file).
+        
+        Args:
+            key (str): Configuration key
+            value (str): Override value
+        """
+        self._overrides[key] = str(value)
+    
     def get(self, key: str, default: Optional[str] = None) -> str:
         """Get a configuration value by key.
+        
+        Lookup order: CLI overrides -> .env file values -> default.
         
         Args:
             key (str): Configuration key
@@ -125,6 +146,8 @@ class ConfigLoader:
         Returns:
             str: Configuration value
         """
+        if key in self._overrides:
+            return self._overrides[key]
         return self._config.get(key, default)
     
     def get_int(self, key: str, default: int = 0) -> int:
@@ -138,7 +161,7 @@ class ConfigLoader:
             int: Configuration value as integer
         """
         try:
-            return int(self._config.get(key, default))
+            return int(self.get(key, default))
         except (ValueError, TypeError):
             return default
     

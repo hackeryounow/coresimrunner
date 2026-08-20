@@ -31,7 +31,7 @@ from coresimrunner.sequential_reg_runner import SequentialRegRunner
 from coresimrunner.ims.vonr_session import VoNRSessionRunner
 
 
-def provision_subscriptions(count: int, core_network_type: str, delete: bool = False, delete_all: bool = False):
+def provision_subscriptions(count: int, core_network_type: str, delete: bool = False, delete_all: bool = False, config_loader: ConfigLoader = None):
     """
     Provision or delete subscriptions in the specified core network.
     
@@ -40,9 +40,11 @@ def provision_subscriptions(count: int, core_network_type: str, delete: bool = F
         core_network_type: Type of core network ('free5gc', 'open5gs', 'custom')
         delete: If True, delete subscriptions instead of provisioning
         delete_all: If True, delete ALL subscriptions (ignores count)
+        config_loader: Pre-configured ConfigLoader (carries --env-file and CLI overrides)
     """
     try:
-        config_loader = ConfigLoader()
+        if config_loader is None:
+            config_loader = ConfigLoader()
         core_network = create_core_network(core_network_type, config_loader)
         if core_network is None:
             logger.error(f"Unsupported core network type '{core_network_type}'")
@@ -178,7 +180,7 @@ def run_seq_reg(args, config_loader):
         if "SD" in slices and isinstance(slices["SD"], str):
             slices["SD"] = int(slices["SD"], 16)
 
-        gtpu_port = args.gtpu_port if hasattr(args, 'gtpu_port') and args.gtpu_port else 2152
+        gtpu_port = args.gtpu_port if hasattr(args, 'gtpu_port') and args.gtpu_port else config_loader.get_int("GTPU_PORT", 2152)
 
         print(f"\n{'='*60}")
         print(f"Sequential Registration with GTP-U Encapsulation")
@@ -260,8 +262,8 @@ def run_vonr(args, config_loader):
         pcscf_ip = args.pcscf_ip or config_loader.get("PCSCF_IP", "172.22.0.21")
         pcscf_port = args.pcscf_port or config_loader.get_int("PCSCF_PORT", 5060)
         ims_domain = args.ims_domain or None  # auto-derive from PLMN
-        caller_phone = args.caller_phone or "13012345679"
-        callee_phone = args.callee_phone or "13012345678"
+        caller_phone = args.caller_phone or config_loader.get("CALLER_PHONE", "13012345679")
+        callee_phone = args.callee_phone or config_loader.get("CALLEE_PHONE", "13012345678")
         skip_call = args.skip_call
 
         print(f"\n{'='*70}")
@@ -427,6 +429,55 @@ def run_4g_test(args, config_loader):
         return False
 
 
+# Mapping of CLI option name -> .env key. Options set on the command
+# line override the corresponding .env values at runtime.
+_CLI_ENV_MAPPING = {
+    "count": "DEFAULT_SUBSCRIPTION_COUNT",
+    "core_address": "CORE_ADDRESS",
+    "webui_port": "WEBUI_PORT",
+    "username": "USERNAME",
+    "password": "PASSWORD",
+    "api_token": "API_TOKEN",
+    "initial_imsi_index": "INITIAL_IMSI_INDEX",
+    "gnb_address": "GNB_ADDRESS",
+    "gnb_nr_cell_id": "GNB_NR_CELL_ID",
+    "slices": "SLICES",
+    "dnn": "DNN",
+    "enb_address": "ENB_ADDRESS",
+    "apn": "APN",
+    "mme_port": "MME_PORT",
+    "enb_id": "ENB_ID",
+    "enb_cell_id": "ENB_CELL_ID",
+    "imeisv": "IMEISV",
+    "plmn": "PLMN",
+    "ki": "PERMANENT_KEY",
+    "opc": "OPC_VALUE",
+    "tac": "TAC",
+    "log_level": "LOG_LEVEL",
+    "gtpu_port": "GTPU_PORT",
+    "upf_ip": "UPF_IP",
+    "pcscf_ip": "PCSCF_IP",
+    "pcscf_port": "PCSCF_PORT",
+    "caller_phone": "CALLER_PHONE",
+    "callee_phone": "CALLEE_PHONE",
+}
+
+
+def _build_cli_overrides(args) -> dict:
+    """Build .env key overrides from explicitly set CLI options."""
+    overrides = {}
+    for attr, env_key in _CLI_ENV_MAPPING.items():
+        value = getattr(args, attr, None)
+        if value is not None:
+            overrides[env_key] = str(value)
+    # Tri-state IMS flag: None = keep .env ENABLE_IMS value
+    if args.enable_ims is True:
+        overrides["ENABLE_IMS"] = "true"
+    elif args.enable_ims is False:
+        overrides["ENABLE_IMS"] = "false"
+    return overrides
+
+
 def main():
     """Main entry point for subscription provisioning/deletion and UE testing."""
     parser = argparse.ArgumentParser(
@@ -465,6 +516,10 @@ Examples:
 
   # VoNR REGISTER only (no call)
   %(prog)s --mode vonr --skip-call --imsi 0000000001
+
+  # Run with an explicit .env file (any .env key can also be overridden via CLI)
+  %(prog)s --env-file /path/to/my.env --mode ue-test --core-network open5gs
+  %(prog)s --mode provision --count 5 --core-network open5gs --webui-port 9999 --username admin --password 1423
         """
     )
     
@@ -476,6 +531,13 @@ Examples:
         default="provision"
     )
     
+    parser.add_argument(
+        "--env-file", 
+        help="Path to a .env configuration file to use (takes precedence over cwd .env and profiles). All .env keys can additionally be overridden via CLI options", 
+        type=str,
+        default=None
+    )
+    
     # Common arguments
     parser.add_argument(
         "--count", 
@@ -485,9 +547,9 @@ Examples:
     )
     parser.add_argument(
         "--core-network", 
-        help="Type of core network ('free5gc', 'open5gs', or 'custom')", 
+        help="Type of core network ('free5gc', 'open5gs', or 'custom') (default: from .env DEFAULT_CORE_NETWORK or 'free5gc')", 
         choices=['free5gc', 'open5gs', 'custom'],
-        default="free5gc"
+        default=None
     )
     parser.add_argument(
         "--delete",
@@ -510,10 +572,65 @@ Examples:
         default=None
     )
     parser.add_argument(
+        "--gnb-nr-cell-id",
+        help="gNodeB NR Cell ID (default: from .env GNB_NR_CELL_ID or 1)",
+        type=int,
+        default=None
+    )
+    parser.add_argument(
+        "--slices",
+        help="S-NSSAI slice config as JSON, e.g. '{\"SST\": 1, \"SD\": \"010203\"}' (default: from .env SLICES)",
+        type=str,
+        default=None
+    )
+    parser.add_argument(
         "--core-address",
         help="Core network IP address for AMF/MME/WebUI (default: from .env CORE_ADDRESS)",
         type=str,
         default=None
+    )
+    parser.add_argument(
+        "--webui-port",
+        help="WebUI API port for subscription management (default: from .env WEBUI_PORT or 9999)",
+        type=int,
+        default=None
+    )
+    parser.add_argument(
+        "--username",
+        help="WebUI/API login username (default: from .env USERNAME)",
+        type=str,
+        default=None
+    )
+    parser.add_argument(
+        "--password",
+        help="WebUI/API login password (default: from .env PASSWORD)",
+        type=str,
+        default=None
+    )
+    parser.add_argument(
+        "--api-token",
+        help="API token for core network REST API (default: from .env API_TOKEN)",
+        type=str,
+        default=None
+    )
+    parser.add_argument(
+        "--initial-imsi-index",
+        help="Starting IMSI index for provisioning (default: from .env INITIAL_IMSI_INDEX or 1)",
+        type=int,
+        default=None
+    )
+    parser.add_argument(
+        "--enable-ims",
+        dest="enable_ims",
+        help="Enable IMS (pyHSS) provisioning, overrides .env ENABLE_IMS=true",
+        action="store_true",
+        default=None
+    )
+    parser.add_argument(
+        "--no-ims",
+        dest="enable_ims",
+        help="Disable IMS (pyHSS) provisioning, overrides .env ENABLE_IMS=false",
+        action="store_false"
     )
     parser.add_argument(
         "--dnn",
@@ -572,6 +689,12 @@ Examples:
         default=None
     )
     parser.add_argument(
+        "--imeisv",
+        help="IMEISV used in 4G attach (default: from .env IMEISV)",
+        type=str,
+        default=None
+    )
+    parser.add_argument(
         "--plmn",
         help="PLMN ID (MCC+MNC combined, e.g., 20893) (default: from .env PLMN)",
         type=str,
@@ -627,7 +750,7 @@ Examples:
     )
     parser.add_argument(
         "--gtpu-port",
-        help="GTP-U target UDP port for encapsulated packets (default: 2152)",
+        help="GTP-U target UDP port for encapsulated packets (default: from .env GTPU_PORT or 2152)",
         type=int,
         default=None
     )
@@ -635,19 +758,19 @@ Examples:
     # VoNR-specific arguments
     parser.add_argument(
         "--upf-ip",
-        help="UPF GTP-U tunnel endpoint IP for VoNR (default: 172.22.0.8)",
+        help="UPF GTP-U tunnel endpoint IP for VoNR (default: from .env UPF_IP or 172.22.0.8)",
         type=str,
         default=None
     )
     parser.add_argument(
         "--pcscf-ip",
-        help="P-CSCF SIP address for VoNR (default: 172.22.0.21)",
+        help="P-CSCF SIP address for VoNR (default: from .env PCSCF_IP or 172.22.0.21)",
         type=str,
         default=None
     )
     parser.add_argument(
         "--pcscf-port",
-        help="P-CSCF SIP port for VoNR (default: 5060)",
+        help="P-CSCF SIP port for VoNR (default: from .env PCSCF_PORT or 5060)",
         type=int,
         default=None
     )
@@ -659,13 +782,13 @@ Examples:
     )
     parser.add_argument(
         "--caller-phone",
-        help="Caller phone number for VoNR INVITE (default: 13012345679)",
+        help="Caller phone number for VoNR INVITE (default: from .env CALLER_PHONE or 13012345679)",
         type=str,
         default=None
     )
     parser.add_argument(
         "--callee-phone",
-        help="Callee phone number for VoNR INVITE (default: 13012345678)",
+        help="Callee phone number for VoNR INVITE (default: from .env CALLEE_PHONE or 13012345678)",
         type=str,
         default=None
     )
@@ -679,12 +802,22 @@ Examples:
     args = parser.parse_args()
     
     try:
-        # Load configuration
-        config_loader = ConfigLoader(profile_name=args.profile)
+        # Load configuration: --env-file > --profile > active profile/cwd .env;
+        # explicit CLI options override individual .env values
+        overrides = _build_cli_overrides(args)
+        config_loader = ConfigLoader(
+            env_file=args.env_file,
+            profile_name=args.profile,
+            overrides=overrides
+        )
+        
+        # Resolve core network from .env DEFAULT_CORE_NETWORK when not given
+        if args.core_network is None:
+            args.core_network = config_loader.get("DEFAULT_CORE_NETWORK", "free5gc")
         
         if args.mode == "provision":
             count = args.count if args.count is not None else config_loader.get_int("DEFAULT_SUBSCRIPTION_COUNT", 2)
-            success = provision_subscriptions(count, args.core_network, args.delete, args.delete_all)
+            success = provision_subscriptions(count, args.core_network, args.delete, args.delete_all, config_loader)
             if not success:
                 sys.exit(1)
                     

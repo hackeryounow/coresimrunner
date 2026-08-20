@@ -22,23 +22,25 @@ from setuptools import setup
 
 HERE = os.path.abspath(os.path.dirname(__file__))
 
-# Dependencies that are always required and commonly pre-installed.
-# Version pins are intentionally loose so `pip install` works on
-# air-gapped machines against the system site-packages.
-_CORE_REQUIRES = [
+# All runtime dependencies so a plain `pip install` yields a fully
+# working CLI (provision, UE tests, VoNR). Version pins are loose so
+# installs also work against pre-installed system packages.
+#
+#   - requests/pycryptodome/loguru/tqdm: core libraries
+#   - pycrate:  ASN.1 codec for NGAP/S1AP/NAS
+#   - pysctp:   SCTP transport (build needs libsctp-dev when no
+#               matching wheel exists: sudo apt-get install libsctp-dev)
+#   - CryptoMobile: 3GPP Milenage algorithms; NOT on PyPI, fetched
+#               straight from GitHub
+_REQUIRES = [
     "requests",
     "pycryptodome",
     "loguru",
     "tqdm",
+    "pycrate",
+    "pysctp",
+    "CryptoMobile @ git+https://github.com/mitshell/CryptoMobile.git",
 ]
-
-# Heavy / niche protocol dependencies. They are documented in
-# requirements.txt and the README, but kept out of the mandatory
-# install_requires so provisioning works without network access:
-#   - pycrate: ASN.1 codec, often vendored on sys.path
-#   - pysctp:  SCTP transport, needs libsctp-dev to build
-#   - pytest:  only needed for running the test suite
-# Install them with: python3 -m pip install coresimrunner[protocol]
 
 
 def read_long_description():
@@ -67,18 +69,20 @@ setup(
         "coresimrunner.integration",
         "coresimrunner.ims",
     ],
-    # Ship subscription templates and the default .env so the CLI
-    # works from any working directory after installation
+    # Ship subscription templates, the config template (.env.example,
+    # always committed) and the local .env (when present, e.g. local
+    # installs). Note: .env is gitignored, so installs from GitHub only
+    # contain .env.example — copy it to .env and edit for your setup.
     package_data={
         "coresimrunner": [
             "config/*.json",
             ".env",
+            ".env.example",
         ],
     },
     include_package_data=True,
-    install_requires=_CORE_REQUIRES,
+    install_requires=_REQUIRES,
     extras_require={
-        "protocol": ["pycrate", "pysctp"],
         "test": ["pytest"],
     },
     entry_points={
