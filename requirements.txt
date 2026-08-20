@@ -29,3 +29,4 @@ pysctp>=0.7.0
 # --- Development / Testing ---
 # Test framework
 pytest>=7.0.0
+git+https://github.com/mitshell/CryptoMobile.git

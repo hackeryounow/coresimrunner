@@ -110,20 +110,60 @@ Verify the installation:
 python3 -c "from CryptoMobile.Milenage import Milenage; print('CryptoMobile OK')"
 ```
 
-## 🚀 Quick Start
+### pip Installation (recommended)
 
-### 1. Setup Dependencies
+The project is pip-installable. After installation the `coresim` command
+is available system-wide — **no `python3` prefix needed**:
 
 ```bash
-cd /root/5gc/CoreSimRunner
+cd /root/5gc/coresimrunner
+python3 -m pip install .
+```
+
+Then run from **any directory**:
+
+```bash
+coresim --help
+coresim --mode provision --count 5 --core-network open5gs
+coresim --mode provision --delete-all --core-network open5gs
+coresim --mode ue-test --core-network open5gs
+```
+
+Notes:
+
+* The installed package bundles `config/*.json` templates and a default
+  `.env`. If a `.env` exists in the current working directory it takes
+  precedence over the bundled one.
+* `pip install -e .` (editable) is **not supported** because the repo root
+  is the package itself. For development, run `python3 coresim_runner.py ...`
+  from the source tree instead.
+* After changing source code, re-run `python3 -m pip install .` to refresh
+  the installed copy.
+* Optional extras: `python3 -m pip install ".[protocol]"` (pycrate + pysctp)
+  and `".[test]"` (pytest).
+
+## 🚀 Quick Start
+
+### 1. Install
+
+```bash
+cd /root/5gc/coresimrunner
+python3 -m pip install .
+```
+
+Or use the source tree directly (no install):
+
+```bash
+cd /root/5gc/coresimrunner
 bash setup.sh
 ```
 
 ### 2. Verify Installation
 
 ```bash
-python3 test_imports.py
-# Should show all imports successful
+coresim --help
+# or from the source tree:
+python3 coresim_runner.py --help
 ```
 
 ### 3. Configure Environment
@@ -181,6 +221,10 @@ python3 coresim_runner.py --mode provision --count 5 --delete --core-network ope
 ```
 
 ## 🎯 Usage Modes
+
+> After `pip install .`, every `python3 coresim_runner.py` command below
+> can be replaced by the `coresim` alias (e.g., `coresim --mode provision
+> --count 5 --core-network open5gs`).
 
 ### Provision Mode
 

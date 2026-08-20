@@ -16,6 +16,11 @@ _DEFAULT_PROFILES_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "data", "profiles"
 )
 
+# Directory containing this module (the installed package directory).
+# Used as a fallback location for the bundled .env when the CLI is
+# run from an arbitrary working directory after `pip install`.
+_PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 
 class ConfigLoader:
     """Configuration loader that reads from .env and JSON files.
@@ -71,7 +76,15 @@ class ConfigLoader:
         if os.path.exists(default_path):
             return default_path
         
-        # Last resort: legacy .env in current directory
+        # Legacy .env in current working directory
+        if os.path.exists(".env"):
+            return ".env"
+        
+        # Last resort: .env shipped inside the installed package
+        # (allows running `coresim` from any directory after pip install)
+        packaged_env = os.path.join(_PACKAGE_DIR, ".env")
+        if os.path.exists(packaged_env):
+            return packaged_env
         return ".env"
     
     def _load_env_file(self):
