@@ -124,14 +124,3 @@ coresim --mode provision --count 5 --core-network open5gs \
 ```
 
 Full option list and descriptions: `coresim --help`.
-
-## Development
-
-```bash
-# Run unit tests (mocked, no core network needed)
-python3 -m pip install pytest
-python3 -m pytest tests/test_cli_env_options.py tests/test_pyhss_client.py tests/test_open5gs_delete_all.py
-
-# Run without installing
-python3 coresim_runner.py --mode provision --count 2 --core-network open5gs
-```
