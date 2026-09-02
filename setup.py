@@ -78,6 +78,9 @@ setup(
             "config/*.json",
             ".env",
             ".env.example",
+            # setuptools skips dotfiles when globbing package_data —
+            # this non-dot pattern is what actually ships .env.example
+            "*.example",
         ],
     },
     include_package_data=True,
@@ -87,8 +90,7 @@ setup(
     },
     entry_points={
         "console_scripts": [
-            "coresim=coresimrunner.coresim_runner:main",
-            "coresim-runner=coresimrunner.coresim_runner:main",
+            "coresimrunner=coresimrunner.coresim_runner:main",
         ],
     },
     classifiers=[

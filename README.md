@@ -28,7 +28,7 @@ sudo apt-get install libsctp-dev
 ### From GitHub (recommended)
 
 ```bash
-python3 -m pip install git+https://github.com/hackeryounow/coresimrunner.git@v1.4.0
+pip3 install git+https://github.com/hackeryounow/coresimrunner.git@v1.4.0
 ```
 
 > Use `@<branch>` to pick any branch; the default branch works without it.
@@ -38,8 +38,12 @@ python3 -m pip install git+https://github.com/hackeryounow/coresimrunner.git@v1.
 ```bash
 git clone git@github.com:hackeryounow/coresimrunner.git
 cd coresimrunner
-python3 -m pip install .
+pip3 install .
 ```
+
+> If your `pip` points to Python 3 (`pip --version` shows python 3.x),
+> plain `pip install` works just as well — `pip3` / `python3 -m pip`
+> only guarantees the right interpreter on multi-Python systems.
 
 A plain install pulls in **all** runtime dependencies (including
 `pycrate`, `pysctp` and `CryptoMobile`, the latter fetched straight
@@ -52,7 +56,7 @@ after installation, no extras needed.
 >
 > If pip cannot reach GitHub for CryptoMobile, install it manually in a
 > temporary directory first (do NOT clone it into this project):
-> `cd /tmp && git clone https://github.com/mitshell/CryptoMobile.git && cd CryptoMobile && python3 -m pip install .`
+> `cd /tmp && git clone https://github.com/mitshell/CryptoMobile.git && cd CryptoMobile && pip3 install .`
 
 ## Configuration
 
@@ -78,49 +82,68 @@ Edit the keys for your environment:
 | `UPF_IP` / `PCSCF_IP` / `PCSCF_PORT` | VoNR IMS settings |
 
 See `.env.example` for the complete list. Every key can also be set on
-the command line (CLI always wins) — run `coresim --help` for the mapping.
+the command line (CLI always wins) — run `coresimrunner --help` for the mapping.
 
 Use a different `.env` per run:
 
 ```bash
-coresim --env-file /path/to/my.env --mode ue-test --core-network open5gs
+coresimrunner --env-file /path/to/my.env --mode ue-test --core-network open5gs
 ```
 
 ## Usage
 
-After installation the `coresim` command runs from any directory
+After installation the `coresimrunner` command runs from any directory
 (no `python3` prefix needed).
 
 ```bash
 # Provision 5 subscriptions (Open5GS WebUI + pyHSS when ENABLE_IMS=true)
-coresim --mode provision --count 5 --core-network open5gs
+coresimrunner --mode provision --count 5 --core-network open5gs
 
 # Delete 5 subscriptions
-coresim --mode provision --count 5 --core-network open5gs --delete
+coresimrunner --mode provision --count 5 --core-network open5gs --delete
 
 # Delete EVERYTHING: pyHSS (ims_subscriber -> subscriber -> auc -> apn),
 # then all Open5GS WebUI subscribers — ignores --count
-coresim --mode provision --delete-all --core-network open5gs
+coresimrunner --mode provision --delete-all --core-network open5gs
 
 # 5G: register multiple UEs + establish PDU sessions
-coresim --mode ue-test --count 10 --core-network open5gs
+coresimrunner --mode ue-test --count 10 --core-network open5gs
 
 # 4G: attach multiple UEs + establish EPS bearers
-coresim --mode 4g-test --count 10 --core-network open5gs
+coresimrunner --mode 4g-test --count 10 --core-network open5gs
 
 # Sequential 2-round registration with GTP-U encapsulation
-coresim --mode seq-reg --imsi 0000000001 0000000002 --core-network open5gs
+coresimrunner --mode seq-reg --imsi 0000000001 0000000002 --core-network open5gs
 
 # VoNR: 5G registration + IMS PDU + SIP REGISTER + INVITE call
-coresim --mode vonr --imsi 0000000001 --core-network open5gs
+coresimrunner --mode vonr --imsi 0000000001 --core-network open5gs
 ```
 
 Override anything on the command line:
 
 ```bash
-coresim --mode provision --count 5 --core-network open5gs \
+coresimrunner --mode provision --count 5 --core-network open5gs \
         --core-address 192.168.100.11 --webui-port 9999 \
         --username admin --password 1423 --no-ims
 ```
 
-Full option list and descriptions: `coresim --help`.
+Full option list and descriptions: `coresimrunner --help`.
+
+## Project Layout
+
+The repository root **is** the `coresimrunner` package — only files
+required for installation (plus `.env` / `.env.example`) live at the
+top level. Everything else is grouped under `extras/`:
+
+```
+core_network/  integration/  ims/  config/    # package code + templates
+coresim_runner.py  config_loader.py  ...      # package modules
+setup.py  requirements.txt  README.md         # installation files
+.env  .env.example                            # configuration
+extras/
+├── tests/                  # unit tests
+├── scripts/                # helper scripts
+├── pcaps/                  # sample packet captures
+├── ueransim_config/        # UERANSIM gNB/UE reference configs
+└── cscf_vulnerabilities/   # CSCF security research PoCs
+```
